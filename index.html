@@ -252,7 +252,7 @@ input[type=checkbox]{accent-color:var(--accent)}
         </div>
         <div style="font-size:8px;color:var(--text3);font-family:'Space Mono',monospace" id="chartPts"></div>
       </div>
-      <canvas id="spkC" height="150" style="width:100%;display:block"></canvas>
+      <canvas id="spkC" height="260" style="width:100%;display:block"></canvas>
       <div style="display:flex;justify-content:space-between;margin-top:4px;padding:0 4px">
         <span style="font-size:7.5px;color:var(--text3);font-family:'Space Mono',monospace">-2σ</span>
         <span style="font-size:7.5px;color:var(--text3);font-family:'Space Mono',monospace">-1σ</span>
@@ -778,7 +778,7 @@ function renderGauges(){
 function renderSparkline(){
   const canvas=document.getElementById('spkC');if(!canvas)return;
   const ctx=canvas.getContext('2d');
-  const W=canvas.offsetWidth||800, H=150;
+  const W=canvas.offsetWidth||800, H=260;
   canvas.width=W; canvas.height=H;
   ctx.clearRect(0,0,W,H);
 
