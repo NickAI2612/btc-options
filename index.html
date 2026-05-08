@@ -799,8 +799,8 @@ function renderSparkline(){
   canvas.width=W; canvas.height=H;
   ctx.clearRect(0,0,W,H);
 
-  const cut=Date.now()-24*3600*1000;
-  const pts=S.hist.filter(d=>d.ts>cut);
+  const cut=0; // show ALL history
+  const pts=S.hist;
   const cpEl=document.getElementById('chartPts');
   if(cpEl) cpEl.textContent=pts.length+' точек · '+S.hist.length+' всего';
 
@@ -1204,7 +1204,7 @@ function drawZChart(canvasId, H) {
   canvas.width = W; canvas.height = H;
   ctx.clearRect(0, 0, W, H);
 
-  const cut = Date.now() - 48 * 3600 * 1000; // 48h for fullscreen
+  const cut = 0; // show ALL available history
   const pts = S.hist.filter(d => d.ts > cut);
 
   // Grid
