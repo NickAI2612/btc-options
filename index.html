@@ -257,6 +257,21 @@ input[type=checkbox]{accent-color:var(--accent)}
 <!-- RIGHT -->
 <div class="col">
   <div class="sec">
+    <div class="lbl">☁️ Supabase — облачное хранение</div>
+    <div style="color:var(--text2);font-size:10px;line-height:1.7;margin-bottom:8px">
+      Данные хранятся в облаке.<br>Работает на любом устройстве 24/7.
+    </div>
+    <div class="iw"><div class="il">PROJECT URL</div>
+      <input type="text" id="sbUrl" placeholder="https://xxx.supabase.co" oninput="saveSb()">
+    </div>
+    <div class="iw"><div class="il">ANON KEY</div>
+      <input type="password" id="sbKey" placeholder="eyJhbGci..." oninput="saveSb()">
+    </div>
+    <button class="btn-p" onclick="testSb()" style="margin-top:6px">ТЕСТ ПОДКЛЮЧЕНИЯ</button>
+    <div class="tg-st inf" id="sbSt" style="margin-top:6px">Введи URL и ключ выше</div>
+  </div>
+
+  <div class="sec">
     <div class="lbl">Как настроить Telegram</div>
     <div style="color:var(--text2);font-size:10px;line-height:1.9">
       1. Открой <span class="acc">@BotFather</span> в Telegram<br>
@@ -292,8 +307,9 @@ const DERIBIT = 'https://www.deribit.com/api/v2/public/';
 const BINANCE = 'https://fapi.binance.com/fapi/v1/';
 const LS_HIST = 'btcoi_v2_hist4';
 const LS_TG   = 'btcoi_v2_tg';
+const LS_SB   = 'btcoi_v2_sb';   // supabase config
 const REFRESH_MS = 3 * 60 * 1000;
-const MAX_H   = 10080;   // 21 days
+const MAX_H   = 28800;   // 60 days
 const Z7M     = 7  * 24 * 60;
 const Z30M    = 30 * 24 * 60;
 const MIN_PTS = 15;
@@ -372,14 +388,19 @@ function histSave() {
   } catch(e) {}
 }
 function histPush() {
-  S.hist.push({
+  const row = {
     ts: Date.now(), price: S.price,
     pcr: S.pcr, ivSkew: S.ivSkew, dvol: S.dvol,
     termStr: S.termStr,
     mpDelta: S.maxPain > 0 ? (S.maxPain - S.price)/S.price*100 : 0,
     gex: S.gexTotal, funding: S.fundingRate
-  });
+  };
+  S.hist.push(row);
   histSave();
+  // Push to Supabase (columns use snake_case)
+  sbPush({ts:row.ts, price:row.price, pcr:row.pcr, iv_skew:row.ivSkew,
+          dvol:row.dvol, term_str:row.termStr, mp_delta:row.mpDelta,
+          gex:row.gex, funding:row.funding});
 }
 
 // ═══ Z-SCORE ENGINE ═══════════════════════════════════════
@@ -417,6 +438,54 @@ function calcHV(days) {
 }
 
 // ═══ DATA LOAD ════════════════════════════════════════════
+// ═══ SUPABASE ═════════════════════════════════════════════
+let SB = {
+  url: 'https://avppsqawmfrpmldsqzss.supabase.co',
+  key: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF2cHBzcWF3bWZycG1sZHNxenNzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgyNjI0NjAsImV4cCI6MjA5MzgzODQ2MH0._EYMaqNzW-OFW97N3lFdBnkZqlrkyub5LPgdDpAr3-g'
+};
+
+function sbLoad() {
+  try { const r=localStorage.getItem(LS_SB); if(r) SB={...SB,...JSON.parse(r)}; } catch(e){}
+}
+
+async function sbPush(row) {
+  if (!SB.url || !SB.key) return;
+  try {
+    await fetch(SB.url+'/rest/v1/options_history', {
+      method: 'POST',
+      headers: {
+        'apikey': SB.key,
+        'Authorization': 'Bearer '+SB.key,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal'
+      },
+      body: JSON.stringify(row)
+    });
+  } catch(e) {}
+}
+
+async function sbFetch() {
+  if (!SB.url || !SB.key) return;
+  try {
+    const r = await fetch(
+      SB.url+'/rest/v1/options_history?order=ts.asc&limit=28800',
+      { headers: { 'apikey': SB.key, 'Authorization': 'Bearer '+SB.key } }
+    );
+    if (!r.ok) return;
+    const rows = await r.json();
+    if (!Array.isArray(rows) || !rows.length) return;
+    // Merge with localStorage: use Supabase as source of truth
+    S.hist = rows.map(r=>({
+      ts:r.ts, price:r.price||0, pcr:r.pcr||0,
+      ivSkew:r.iv_skew||0, dvol:r.dvol||0,
+      termStr:r.term_str||0, mpDelta:r.mp_delta||0,
+      gex:r.gex||0, funding:r.funding||0
+    }));
+    histSave(); // sync to localStorage cache
+    console.log('Loaded '+S.hist.length+' points from Supabase');
+  } catch(e) {}
+}
+
 async function loadData() {
   setDot('loading');
   try {
@@ -892,7 +961,7 @@ function renderHistStats(){
 История: <span style="color:var(--accent)">${d} дней</span><br>
 Z-score 7д: <span style="color:${n7>=MIN_PTS?'var(--bull)':'var(--orange)'}">${n7} / 2016 точек</span><br>
 Z-score 30д: <span style="color:${n30>=MIN_PTS?'var(--bull)':'var(--orange)'}">${n30} / 10080 точек</span><br>
-Макс хранение: <span style="color:var(--text2)">21 день (~150KB)</span>`;
+Макс хранение: <span style="color:var(--text2)">60 дней (~2MB)</span>`;
 }
 
 // ═══ ALERTS ═══════════════════════════════════════════════
@@ -944,6 +1013,32 @@ function saveTg(){
   S.tg.minScore=parseInt(document.getElementById('tgMin')?.value)||5;
   try{localStorage.setItem(LS_TG,JSON.stringify(S.tg));}catch(e){}
 }
+function saveSb(){
+  SB.url=(document.getElementById('sbUrl')||{}).value||'';
+  SB.key=(document.getElementById('sbKey')||{}).value||'';
+  try{localStorage.setItem(LS_SB,JSON.stringify(SB));}catch(e){}
+}
+async function testSb(){
+  const st=document.getElementById('sbSt');
+  if(!SB.url||!SB.key){if(st){st.textContent='Введи URL и ключ';st.className='tg-st inf';}return;}
+  if(st){st.textContent='Проверка...';st.className='tg-st inf';}
+  try{
+    const r=await fetch(SB.url+'/rest/v1/options_history?limit=1',
+      {headers:{'apikey':SB.key,'Authorization':'Bearer '+SB.key}});
+    if(r.ok){
+      if(st){st.textContent='✓ Подключено! Загружаем историю...';st.className='tg-st ok';}
+      await sbFetch();
+      if(st)st.textContent='✓ Подключено! '+S.hist.length+' точек загружено';
+    } else {
+      if(st){st.textContent='✗ Ошибка: '+r.status+' — проверь ключи';st.className='tg-st err';}
+    }
+  }catch(e){if(st){st.textContent='✗ '+e.message;st.className='tg-st err';}}
+}
+function loadSbUI(){
+  sbLoad();
+  const u=document.getElementById('sbUrl');if(u)u.value=SB.url||'';
+  const k=document.getElementById('sbKey');if(k)k.value=SB.key||'';
+}
 function loadTg(){
   try{const r=localStorage.getItem(LS_TG);if(r){S.tg={...S.tg,...JSON.parse(r)};const tok=document.getElementById('tgTok');if(tok)tok.value=S.tg.token||'';const cht=document.getElementById('tgCht');if(cht)cht.value=S.tg.chatId||'';const mn=document.getElementById('tgMin');if(mn)mn.value=S.tg.minScore||5;}}catch(e){}
 }
@@ -952,7 +1047,9 @@ async function doRefresh(){setDot('loading');txt('updT','Обновление...
 // ═══ INIT ═════════════════════════════════════════════════
 histLoad();
 loadTg();
-loadData();
+sbLoad();
+loadSbUI();
+sbFetch().then(() => loadData());  // load cloud history first, then refresh
 setInterval(loadData, REFRESH_MS);
 setInterval(morning, 60000);
 </script>
