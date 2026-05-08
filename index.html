@@ -141,6 +141,20 @@ input[type=checkbox]{accent-color:var(--accent)}
 .err-ban{background:rgba(255,61,90,.1);border-bottom:1px solid rgba(255,61,90,.3);color:var(--bear);padding:6px 18px;font-size:10px;font-family:'Space Mono',monospace;display:none}
 .err-ban.show{display:block}
 .acc{color:var(--accent)}
+/* FULLSCREEN MODAL */
+.fs-overlay{position:fixed;inset:0;background:rgba(8,10,14,.97);z-index:200;display:none;flex-direction:column;padding:20px}
+.fs-overlay.open{display:flex}
+.fs-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-shrink:0}
+.fs-title{font-family:'Space Mono',monospace;font-size:13px;font-weight:700;color:var(--accent);letter-spacing:.08em}
+.fs-legend{display:flex;gap:16px}
+.fs-close{background:var(--bg3);border:1px solid var(--border2);color:var(--text2);padding:6px 14px;border-radius:3px;cursor:pointer;font-family:'Space Mono',monospace;font-size:10px;letter-spacing:.06em}
+.fs-close:hover{border-color:var(--bear);color:var(--bear)}
+.fs-body{flex:1;position:relative;min-height:0}
+canvas#fsChart{width:100%;height:100%;display:block}
+.fs-scale{display:flex;justify-content:space-between;padding:6px 10px 0;flex-shrink:0}
+.fs-scale span{font-family:'Space Mono',monospace;font-size:9px;color:var(--text3)}
+.expand-btn{background:none;border:1px solid var(--border2);color:var(--text3);padding:3px 8px;border-radius:3px;cursor:pointer;font-family:'Space Mono',monospace;font-size:9px;letter-spacing:.05em;transition:all .15s}
+.expand-btn:hover{border-color:var(--accent);color:var(--accent)}
 .div{height:1px;background:var(--border);margin:10px 0}
 </style>
 </head>
@@ -244,13 +258,16 @@ input[type=checkbox]{accent-color:var(--accent)}
     <div class="lbl">Z-Score — исторические линии (последние 24ч)</div>
     <div style="background:var(--bg2);border:1px solid var(--border);border-radius:5px;padding:10px 12px 8px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-        <div style="display:flex;gap:12px;flex-wrap:wrap">
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
           <span style="font-size:8.5px;color:#ff9500;font-family:'Space Mono',monospace">● PCR</span>
           <span style="font-size:8.5px;color:#2d7ef7;font-family:'Space Mono',monospace">● DVOL</span>
           <span style="font-size:8.5px;color:#ab47bc;font-family:'Space Mono',monospace">● IV Skew</span>
           <span style="font-size:8.5px;color:#00e87a;font-family:'Space Mono',monospace;font-weight:700">● Composite</span>
         </div>
-        <div style="font-size:8px;color:var(--text3);font-family:'Space Mono',monospace" id="chartPts"></div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="font-size:8px;color:var(--text3);font-family:'Space Mono',monospace" id="chartPts"></div>
+          <button class="expand-btn" onclick="openFs()">⤢ ПОЛНЫЙ ЭКРАН</button>
+        </div>
       </div>
       <canvas id="spkC" height="260" style="width:100%;display:block"></canvas>
       <div style="display:flex;justify-content:space-between;margin-top:4px;padding:0 4px">
@@ -690,7 +707,7 @@ function renderAll() {
   try { renderHeader(); } catch(e){}
   try { renderComposite(); } catch(e){}
   try { renderGauges(); } catch(e){}
-  try { renderSparkline(); } catch(e){}
+  try { renderSparklineMini(); } catch(e){}
   try { renderMaxPain(); } catch(e){}
   try { renderOI(); } catch(e){}
   try { renderMetrics(); } catch(e){}
@@ -1176,9 +1193,191 @@ histLoad();
 loadTg();
 sbLoad();
 loadSbUI();
-sbFetch().then(() => loadData());  // load cloud history first, then refresh
+sbFetch().then(() => loadData());
+
+// Fullscreen z-score chart
+function drawZChart(canvasId, H) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.offsetWidth || canvas.parentElement.offsetWidth || 1000;
+  canvas.width = W; canvas.height = H;
+  ctx.clearRect(0, 0, W, H);
+
+  const cut = Date.now() - 48 * 3600 * 1000; // 48h for fullscreen
+  const pts = S.hist.filter(d => d.ts > cut);
+
+  // Grid
+  for (let z = -3; z <= 3; z++) {
+    const y = H/2 - (z/3)*(H/2-16);
+    ctx.strokeStyle = z===0 ? 'rgba(255,255,255,0.2)' : Math.abs(z)===2 ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.05)';
+    ctx.lineWidth = z===0 ? 1.2 : 0.6;
+    ctx.setLineDash(z===0 ? [] : Math.abs(z)===1 ? [4,5] : [2,4]);
+    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
+    ctx.setLineDash([]);
+    if (z !== 0) {
+      ctx.fillStyle = Math.abs(z)===2 ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.2)';
+      ctx.font = '9px Space Mono, monospace'; ctx.textAlign = 'left';
+      ctx.fillText((z>0?'+':'')+z+'σ', 4, y-3);
+    }
+  }
+  // Threshold bands
+  const y2p = H/2-(2/3)*(H/2-16), y1p = H/2-(1/3)*(H/2-16);
+  const y1n = H/2+(1/3)*(H/2-16), y2n = H/2+(2/3)*(H/2-16);
+  ctx.fillStyle='rgba(0,232,122,0.05)'; ctx.fillRect(0,16,W,y2p-16);
+  ctx.fillStyle='rgba(0,232,122,0.03)'; ctx.fillRect(0,y2p,W,y1p-y2p);
+  ctx.fillStyle='rgba(255,61,90,0.03)'; ctx.fillRect(0,y1n,W,y2n-y1n);
+  ctx.fillStyle='rgba(255,61,90,0.05)'; ctx.fillRect(0,y2n,W,H-y2n);
+
+  if (pts.length < 2) {
+    ctx.fillStyle='rgba(122,130,154,0.5)';
+    ctx.font='11px Space Mono, monospace'; ctx.textAlign='center';
+    ctx.fillText('Накопление данных... ('+S.hist.length+' точек всего)', W/2, H/2+5);
+    return;
+  }
+
+  const n = pts.length;
+  const tMn = pts[0].ts, tMx = pts[n-1].ts||tMn+1;
+  const tX = t => ((t-tMn)/(tMx-tMn||1))*(W-24)+12;
+  const tY = v => H/2-(v/3)*(H/2-16);
+
+  function rolZ(arr, cur, win) {
+    const sl = arr.slice(Math.max(0,arr.length-win));
+    if (sl.length<3) return null;
+    const m=sl.reduce((a,b)=>a+b,0)/sl.length;
+    const sd=Math.sqrt(sl.reduce((a,b)=>a+(b-m)**2,0)/sl.length);
+    return sd<1e-10?0:Math.max(-3,Math.min(3,(cur-m)/sd));
+  }
+
+  const pcrV=pts.map(d=>d.pcr), dvolV=pts.map(d=>d.dvol), skewV=pts.map(d=>d.ivSkew);
+  const WIN = Math.min(pts.length, 480);
+
+  const series = [
+    {color:'rgba(255,149,0,0.8)', lw:1.3,
+     data:pts.map((d,i)=>{const z=rolZ(pcrV.slice(0,i+1),d.pcr,WIN);return{ts:d.ts,v:z!==null?-z:null};})},
+    {color:'rgba(45,126,247,0.8)', lw:1.3,
+     data:pts.map((d,i)=>{const z=rolZ(dvolV.slice(0,i+1),d.dvol,WIN);return{ts:d.ts,v:z!==null?-z:null};})},
+    {color:'rgba(171,71,188,0.8)', lw:1.3,
+     data:pts.map((d,i)=>{const z=rolZ(skewV.slice(0,i+1),d.ivSkew,WIN);return{ts:d.ts,v:z!==null?-z:null};})},
+  ];
+
+  const compD = pts.map((d,i)=>{
+    const pz=rolZ(pcrV.slice(0,i+1),d.pcr,WIN);
+    const dz=rolZ(dvolV.slice(0,i+1),d.dvol,WIN);
+    const sz=rolZ(skewV.slice(0,i+1),d.ivSkew,WIN);
+    let s=0,c=0;
+    if(pz!==null){s-=pz*0.35;c++;}
+    if(dz!==null){s-=dz*0.35;c++;}
+    if(sz!==null){s-=sz*0.30;c++;}
+    return{ts:d.ts,v:c>0?Math.max(-3,Math.min(3,s)):null};
+  });
+
+  // Draw component lines
+  for (const sr of series) {
+    const vld = sr.data.filter(p=>p.v!==null);
+    if (vld.length < 2) continue;
+    ctx.beginPath(); let st=false;
+    for (const pt of sr.data) {
+      if(pt.v===null){st=false;continue;}
+      const x=tX(pt.ts),y=tY(pt.v);
+      if(!st){ctx.moveTo(x,y);st=true;} else ctx.lineTo(x,y);
+    }
+    ctx.strokeStyle=sr.color; ctx.lineWidth=sr.lw; ctx.stroke();
+  }
+
+  // Composite fill + line
+  const vc = compD.filter(p=>p.v!==null);
+  if (vc.length >= 2) {
+    const gr=ctx.createLinearGradient(0,0,0,H);
+    gr.addColorStop(0,'rgba(0,232,122,0.18)'); gr.addColorStop(0.5,'rgba(0,232,122,0)');
+    gr.addColorStop(0.5,'rgba(255,61,90,0)'); gr.addColorStop(1,'rgba(255,61,90,0.15)');
+    ctx.beginPath(); ctx.moveTo(tX(vc[0].ts),H/2);
+    for(const pt of compD){if(pt.v!==null)ctx.lineTo(tX(pt.ts),tY(pt.v));}
+    ctx.lineTo(tX(vc[vc.length-1].ts),H/2); ctx.closePath();
+    ctx.fillStyle=gr; ctx.fill();
+
+    ctx.beginPath(); let st=false;
+    for(const pt of compD){
+      if(pt.v===null){st=false;continue;}
+      const x=tX(pt.ts),y=tY(pt.v);
+      if(!st){ctx.moveTo(x,y);st=true;} else ctx.lineTo(x,y);
+    }
+    const lv=vc[vc.length-1].v;
+    ctx.strokeStyle=lv>0.3?'rgba(0,232,122,0.95)':lv<-0.3?'rgba(255,61,90,0.95)':'rgba(122,130,154,0.85)';
+    ctx.lineWidth=2.5; ctx.stroke();
+    ctx.beginPath(); ctx.arc(tX(vc[vc.length-1].ts),tY(lv),5,0,Math.PI*2);
+    ctx.fillStyle=lv>0.3?'var(--bull)':lv<-0.3?'var(--bear)':'var(--neut)'; ctx.fill();
+  }
+
+  // Time labels along bottom
+  if (pts.length >= 2) {
+    ctx.fillStyle='rgba(255,255,255,0.25)'; ctx.font='8px Space Mono,monospace'; ctx.textAlign='center';
+    const steps = Math.min(8, pts.length);
+    for (let i=0;i<steps;i++) {
+      const idx = Math.floor(i/(steps-1)*(pts.length-1));
+      const x = tX(pts[idx].ts);
+      const d = new Date(pts[idx].ts);
+      ctx.fillText(d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}), x, H-4);
+    }
+  }
+}
+
+function renderSparklineMini() {
+  const canvas = document.getElementById('spkC');
+  if (!canvas) return;
+  const H = 260;
+  canvas.height = H;
+  drawZChart('spkC', H);
+  const cpEl = document.getElementById('chartPts');
+  const cut = Date.now()-24*3600*1000;
+  const n24 = S.hist.filter(d=>d.ts>cut).length;
+  if(cpEl) cpEl.textContent = n24+' точек 24ч · '+S.hist.length+' всего';
+}
+
+function openFs() {
+  const ov = document.getElementById('fsOverlay');
+  if(!ov) return;
+  ov.classList.add('open');
+  const fsPts = document.getElementById('fspts');
+  if(fsPts) fsPts.textContent = S.hist.length+' точек';
+  setTimeout(() => {
+    const canvas = document.getElementById('fsChart');
+    if(canvas){
+      canvas.width = canvas.parentElement.offsetWidth;
+      canvas.height = canvas.parentElement.offsetHeight;
+      drawZChart('fsChart', canvas.height);
+    }
+  }, 50);
+}
+function closeFs() {
+  const ov=document.getElementById('fsOverlay');if(ov)ov.classList.remove('open');
+}
+function closeFsIfBg(e) {
+  if(e.target.id==='fsOverlay') closeFs();
+}
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeFs(); });  // load cloud history first, then refresh
 setInterval(loadData, REFRESH_MS);
 setInterval(morning, 60000);
 </script>
+<!-- FULLSCREEN Z-SCORE MODAL -->
+<div class="fs-overlay" id="fsOverlay" onclick="closeFsIfBg(event)">
+  <div class="fs-hdr">
+    <div class="fs-title">Z-SCORE — ИСТОРИЧЕСКИЕ ЛИНИИ</div>
+    <div class="fs-legend">
+      <span style="font-size:9px;color:#ff9500;font-family:'Space Mono',monospace">● PCR</span>
+      <span style="font-size:9px;color:#2d7ef7;font-family:'Space Mono',monospace">● DVOL</span>
+      <span style="font-size:9px;color:#ab47bc;font-family:'Space Mono',monospace">● IV Skew</span>
+      <span style="font-size:9px;color:#00e87a;font-family:'Space Mono',monospace;font-weight:700">● Composite</span>
+      <span style="font-size:9px;color:var(--text3);font-family:'Space Mono',monospace" id="fspts"></span>
+    </div>
+    <button class="fs-close" onclick="closeFs()">✕ ЗАКРЫТЬ (ESC)</button>
+  </div>
+  <div class="fs-body">
+    <canvas id="fsChart"></canvas>
+  </div>
+  <div class="fs-scale">
+    <span>-3σ</span><span>-2σ</span><span>-1σ</span><span>0</span><span>+1σ</span><span>+2σ</span><span>+3σ</span>
+  </div>
+</div>
 </body>
 </html>
