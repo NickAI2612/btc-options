@@ -192,20 +192,7 @@ input[type=checkbox]{accent-color:var(--accent)}
     <div class="comp-bar"><div class="comp-fill" id="cF" style="width:50%"></div></div>
     <div class="hist-info" id="hI">⏳ Накапливаем историю...</div>
   </div>
-  <div class="sec" style="margin-top:8px">
-    <div class="lbl">Z-Score — исторические линии</div>
-    <div class="spark-box" style="padding:8px 10px">
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px">
-        <span style="font-size:8px;color:var(--text3);font-family:'Space Mono',monospace">ПОСЛЕДНИЕ 24Ч</span>
-        <span style="font-size:8px;color:#ff9500">■ PCR</span>
-        <span style="font-size:8px;color:#2d7ef7">■ DVOL</span>
-        <span style="font-size:8px;color:#ab47bc">■ Skew</span>
-        <span style="font-size:8px;color:#00e87a">■ Comp</span>
-      </div>
-      <canvas id="spkC" height="110"></canvas>
-      <div class="spark-sc"><span>-2σ</span><span>-1σ</span><span>0</span><span>+1σ</span><span>+2σ</span></div>
-    </div>
-  </div>
+
   <div class="sec" style="margin-top:8px">
     <div class="lbl">Компоненты — Z-Score Gauges</div>
     <div style="display:flex;justify-content:space-between;font-family:'Space Mono',monospace;font-size:7px;color:var(--text3);padding:0 0 4px 68px">
@@ -253,6 +240,29 @@ input[type=checkbox]{accent-color:var(--accent)}
     </div>
     <div id="oiL">Загрузка...</div>
   </div>
+  <div class="sec" style="margin-top:8px">
+    <div class="lbl">Z-Score — исторические линии (последние 24ч)</div>
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:5px;padding:10px 12px 8px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="display:flex;gap:12px;flex-wrap:wrap">
+          <span style="font-size:8.5px;color:#ff9500;font-family:'Space Mono',monospace">● PCR</span>
+          <span style="font-size:8.5px;color:#2d7ef7;font-family:'Space Mono',monospace">● DVOL</span>
+          <span style="font-size:8.5px;color:#ab47bc;font-family:'Space Mono',monospace">● IV Skew</span>
+          <span style="font-size:8.5px;color:#00e87a;font-family:'Space Mono',monospace;font-weight:700">● Composite</span>
+        </div>
+        <div style="font-size:8px;color:var(--text3);font-family:'Space Mono',monospace" id="chartPts"></div>
+      </div>
+      <canvas id="spkC" height="150" style="width:100%;display:block"></canvas>
+      <div style="display:flex;justify-content:space-between;margin-top:4px;padding:0 4px">
+        <span style="font-size:7.5px;color:var(--text3);font-family:'Space Mono',monospace">-2σ</span>
+        <span style="font-size:7.5px;color:var(--text3);font-family:'Space Mono',monospace">-1σ</span>
+        <span style="font-size:7.5px;color:var(--text3);font-family:'Space Mono',monospace">0</span>
+        <span style="font-size:7.5px;color:var(--text3);font-family:'Space Mono',monospace">+1σ</span>
+        <span style="font-size:7.5px;color:var(--text3);font-family:'Space Mono',monospace">+2σ</span>
+      </div>
+    </div>
+  </div>
+
   <div class="sec" style="margin-top:8px">
     <div class="lbl">Метрики опционного рынка</div>
     <div class="m2" id="mGrid">—</div>
@@ -768,12 +778,14 @@ function renderGauges(){
 function renderSparkline(){
   const canvas=document.getElementById('spkC');if(!canvas)return;
   const ctx=canvas.getContext('2d');
-  const W=canvas.offsetWidth||220, H=110;
+  const W=canvas.offsetWidth||800, H=150;
   canvas.width=W; canvas.height=H;
   ctx.clearRect(0,0,W,H);
 
   const cut=Date.now()-24*3600*1000;
   const pts=S.hist.filter(d=>d.ts>cut);
+  const cpEl=document.getElementById('chartPts');
+  if(cpEl) cpEl.textContent=pts.length+' точек · '+S.hist.length+' всего';
 
   // Grid lines
   for(let z=-2;z<=2;z++){
@@ -809,8 +821,8 @@ function renderSparkline(){
 
   const n=pts.length;
   const tMn=pts[0].ts, tMx=pts[n-1].ts||tMn+1;
-  const tX=t=>((t-tMn)/(tMx-tMn||1))*(W-16)+8;
-  const tY=v=>H/2-(v/2.5)*(H/2-8);
+  const tX=t=>((t-tMn)/(tMx-tMn||1))*(W-20)+10;
+  const tY=v=>H/2-(v/2.5)*(H/2-12);
 
   // Rolling z-score helper for stored values
   function rollingZ(arr, cur, win){
@@ -913,7 +925,7 @@ function renderSparkline(){
   } else {
     ctx.fillStyle='rgba(122,130,154,0.4)';
     ctx.font='8px Space Mono,monospace';ctx.textAlign='center';
-    ctx.fillText('Накопление данных — нужно ~20 точек',W/2,H/2+4);
+    ctx.fillText('Накопление данных — нужно ~20 точек (сейчас: '+pts.length+')',W/2,H/2+4);
   }
 }
 
