@@ -1703,13 +1703,12 @@ async function doRefresh(){setDot('loading');txt('updT','Обновление...
 // ═══ INIT ═════════════════════════════════════════════════
 // ─── COMPONENT CHART RENDERER ────────────────────────────
 const COMP_DEFS = [
-  {key:'pcr',   label:'PCR',       color:'rgba(255,149,0,0.9)',   inv:true},
-  {key:'ivSkew',label:'IV Skew',   color:'rgba(171,71,188,0.9)',  inv:true},
-  {key:'dvol',  label:'IV7',       color:'rgba(100,190,255,0.9)', inv:true,  win:'z7'},
-  {key:'dvol',  label:'IV30',      color:'rgba(60,130,255,0.9)',  inv:true,  win:'z30', dash:true},
-  {key:'termStr',label:'Term Str.',color:'rgba(233,30,99,0.85)',  inv:true},
-  {key:'funding',label:'Funding',  color:'rgba(76,175,80,0.85)',  inv:true},
+  {key:'pcr',    label:'PCR',       color:'rgba(255,149,0,0.9)',   inv:true},
+  {key:'ivSkew', label:'IV Skew',   color:'rgba(171,71,188,0.9)',  inv:true},
+  {key:'termStr',label:'Term Str.', color:'rgba(233,30,99,0.85)',  inv:true},
+  {key:'funding',label:'Funding',   color:'rgba(76,175,80,0.85)',  inv:true},
 ];
+// IV7/IV30 shown together in main composite chart — not in individual grid
 
 function drawSingleZ(ctx, W, H, key, inv, win, color, dash) {
   ctx.clearRect(0,0,W,H);
