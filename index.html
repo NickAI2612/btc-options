@@ -659,9 +659,10 @@ function processAll() {
     const mCW = mOpts.filter(o=>o.type==='C'&&o.strike>price).sort((a,b)=>b.oi-a.oi).slice(0,3);
     const mPW = mOpts.filter(o=>o.type==='P'&&o.strike<price).sort((a,b)=>b.oi-a.oi).slice(0,3);
     const mMax = Math.max(...mCW.map(o=>o.oi),...mPW.map(o=>o.oi),1);
+    // gbs computed later — store raw for now, update after GEX
     S.oiMonthly = [
-      ...mCW.map(o=>({strike:o.strike,type:'CALL',oi:o.oi,pct:o.oi/mMax,gex:gbs[o.strike]||0})),
-      ...mPW.map(o=>({strike:o.strike,type:'PUT', oi:o.oi,pct:o.oi/mMax,gex:gbs[o.strike]||0}))
+      ...mCW.map(o=>({strike:o.strike,type:'CALL',oi:o.oi,pct:o.oi/mMax,gex:0})),
+      ...mPW.map(o=>({strike:o.strike,type:'PUT', oi:o.oi,pct:o.oi/mMax,gex:0}))
     ].sort((a,b)=>b.strike-a.strike);
   } else {
     S.maxPainMonthly = 0;
@@ -720,6 +721,8 @@ function processAll() {
   }
   S.gexByStr = gbs;
   S.gexTotal = Object.values(gbs).reduce((a,b)=>a+b,0);
+  // Now update monthly OI with real GEX values
+  if(S.oiMonthly) S.oiMonthly = S.oiMonthly.map(o=>({...o,gex:gbs[o.strike]||0}));
 
   // Gamma Flip
   const skeys=Object.keys(gbs).map(Number).sort((a,b)=>a-b);
