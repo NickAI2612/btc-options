@@ -237,16 +237,43 @@ canvas#fsChart{width:100%;height:100%;display:block}
 <!-- CENTER -->
 <div class="col">
   <div class="sec">
-    <div class="lbl">Max Pain — магнит к экспирации</div>
-    <div class="mp-row">
-      <div><div class="mp-val" id="mpV">$—</div><div style="font-size:9px;color:var(--text3);margin-top:2px" id="mpE">—</div></div>
-      <div style="text-align:right"><div class="mp-delta" id="mpD">—</div><div style="font-size:8px;color:var(--text3);margin-top:1px">от текущей</div></div>
+    <div style="display:flex;gap:1px;margin-bottom:1px">
+      <!-- WEEKLY -->
+      <div style="flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:5px 0 0 5px;padding:10px">
+        <div style="font-family:'Space Mono',monospace;font-size:7.5px;letter-spacing:.1em;color:var(--text3);margin-bottom:5px">WEEKLY MAX PAIN</div>
+        <div style="font-family:'Space Mono',monospace;font-size:22px;font-weight:700;color:var(--yellow)" id="mpV">$—</div>
+        <div style="font-size:9px;color:var(--text3);margin-top:2px" id="mpE">—</div>
+        <div style="display:flex;justify-content:space-between;margin-top:6px;align-items:center">
+          <div style="font-size:9px;color:var(--text3)">До экспирации:</div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--orange);font-weight:700" id="expC">—</div>
+        </div>
+        <div class="ep" style="margin-top:5px"><div class="ep-f" id="epF" style="width:50%"></div></div>
+        <div style="font-family:'Space Mono',monospace;font-size:13px;font-weight:700;margin-top:5px" id="mpD">—</div>
+        <div style="font-size:8px;color:var(--text3)">от текущей цены</div>
+      </div>
+      <!-- MONTHLY -->
+      <div style="flex:1;background:var(--bg2);border:1px solid var(--border);border-radius:0 5px 5px 0;padding:10px;border-left:none">
+        <div style="font-family:'Space Mono',monospace;font-size:7.5px;letter-spacing:.1em;color:var(--blue);margin-bottom:5px">MONTHLY MAX PAIN</div>
+        <div style="font-family:'Space Mono',monospace;font-size:22px;font-weight:700;color:var(--blue)" id="mpMV">$—</div>
+        <div style="font-size:9px;color:var(--text3);margin-top:2px" id="mpME">—</div>
+        <div style="display:flex;justify-content:space-between;margin-top:6px;align-items:center">
+          <div style="font-size:9px;color:var(--text3)">До экспирации:</div>
+          <div style="font-family:'Space Mono',monospace;font-size:10px;color:var(--blue);font-weight:700" id="expMC">—</div>
+        </div>
+        <div class="ep" style="margin-top:5px"><div class="ep-f" id="epMF" style="width:50%;background:var(--blue)"></div></div>
+        <div style="font-family:'Space Mono',monospace;font-size:13px;font-weight:700;margin-top:5px" id="mpMD">—</div>
+        <div style="font-size:8px;color:var(--text3)">от текущей цены</div>
+      </div>
     </div>
-    <div class="exp-row"><div style="color:var(--text3);font-size:9px">До экспирации:</div><div class="exp-cd" id="expC">—</div></div>
-    <div class="ep"><div class="ep-f" id="epF" style="width:50%"></div></div>
   </div>
   <div class="sec" style="margin-top:8px">
-    <div class="lbl">OI Уровни + GEX по страйкам</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <div class="lbl" style="margin-bottom:0">OI Уровни + GEX</div>
+      <div style="display:flex;gap:4px">
+        <button class="expand-btn" id="oiTabW" onclick="setOiTab('W')" style="border-color:var(--accent);color:var(--accent)">WEEKLY</button>
+        <button class="expand-btn" id="oiTabM" onclick="setOiTab('M')">MONTHLY</button>
+      </div>
+    </div>
     <div style="display:flex;gap:12px;font-size:8px;color:var(--text3);margin-bottom:5px">
       <span style="color:var(--bull)">■</span>CALL Wall &nbsp;
       <span style="color:var(--bear)">■</span>PUT Wall &nbsp;
@@ -353,7 +380,7 @@ const MIN_PTS = 15;
 // ═══ STATE ════════════════════════════════════════════════
 let S = {
   price:0, prevPrice:0, opts:[],
-  maxPain:0, maxPainExp:null,
+  maxPain:0, maxPainExp:null, maxPainMonthly:0, maxPainMonthlyExp:null, oiMonthly:[],
   pcr:0, ivSkew:0, dvol:0, termStr:0,
   gexTotal:0, gexByStr:{}, gammaFlip:0,
   fundingRate:0, hv30:0,
@@ -589,19 +616,58 @@ function processAll() {
 
   const expSet = [...new Set(parsed.map(o=>o.expiry.getTime()))].sort();
 
-  // Prefer Friday expiries for Max Pain (weekly = most meaningful)
-  // Friday = day 5 in UTC
+  const nextAny = expSet.find(t=>t>now) || expSet[0];
+
+  // Weekly Max Pain = next Friday
   const fridayExps = expSet.filter(t => new Date(t).getUTCDay() === 5 && t > now);
   const nextFriday = fridayExps.length > 0 ? fridayExps[0] : null;
 
-  // Next expiry for OI levels (any, nearest)
-  const nextAny = expSet.find(t=>t>now) || expSet[0];
+  // Monthly Max Pain = last Friday of current/next month
+  const isLastFriday = (t) => {
+    const d = new Date(t);
+    const nextWeek = new Date(t + 7*86400*1000);
+    return d.getUTCDay() === 5 && nextWeek.getUTCMonth() !== d.getUTCMonth();
+  };
+  const monthlyExps = expSet.filter(t => isLastFriday(t) && t > now);
+  const nextMonthly = monthlyExps.length > 0 ? monthlyExps[0] : null;
 
-  // Use Friday for Max Pain, nearest for OI display
-  const nextExp  = nextFriday || nextAny;  // Max Pain uses Friday
-  const nextExpOI = nextAny;               // OI levels use nearest
-  const farExp   = expSet.length>1 ? expSet[expSet.length-1] : null;
+  // For OI levels — use nearest expiry
+  const nextExpOI = nextAny;
+  // For weekly Max Pain
+  const nextExp = nextFriday || nextAny;
+  // Far expiry for Term Structure
+  const farExp = expSet.length>1 ? expSet[expSet.length-1] : null;
+
   S.maxPainExp = new Date(nextExp);
+
+  // Compute monthly Max Pain separately
+  if (nextMonthly && nextMonthly !== nextExp) {
+    const mOpts = parsed.filter(o=>o.expiry.getTime()===nextMonthly);
+    const mStrikes = [...new Set(mOpts.map(o=>o.strike))].sort((a,b)=>a-b);
+    let minPM=Infinity, mpM=0;
+    for (const st of mStrikes) {
+      let pain=0;
+      for (const o of mOpts) {
+        if(o.type==='C'&&o.strike<st) pain+=(st-o.strike)*o.oi;
+        if(o.type==='P'&&o.strike>st) pain+=(o.strike-st)*o.oi;
+      }
+      if(pain<minPM){minPM=pain;mpM=st;}
+    }
+    S.maxPainMonthly = mpM;
+    S.maxPainMonthlyExp = new Date(nextMonthly);
+    // Monthly OI levels (top 3 each side)
+    const mCW = mOpts.filter(o=>o.type==='C'&&o.strike>price).sort((a,b)=>b.oi-a.oi).slice(0,3);
+    const mPW = mOpts.filter(o=>o.type==='P'&&o.strike<price).sort((a,b)=>b.oi-a.oi).slice(0,3);
+    const mMax = Math.max(...mCW.map(o=>o.oi),...mPW.map(o=>o.oi),1);
+    S.oiMonthly = [
+      ...mCW.map(o=>({strike:o.strike,type:'CALL',oi:o.oi,pct:o.oi/mMax,gex:gbs[o.strike]||0})),
+      ...mPW.map(o=>({strike:o.strike,type:'PUT', oi:o.oi,pct:o.oi/mMax,gex:gbs[o.strike]||0}))
+    ].sort((a,b)=>b.strike-a.strike);
+  } else {
+    S.maxPainMonthly = 0;
+    S.maxPainMonthlyExp = null;
+    S.oiMonthly = [];
+  }
 
   // Max Pain calculation uses Friday expiry
   const nOpts = parsed.filter(o=>o.expiry.getTime()===nextExp);
@@ -962,23 +1028,58 @@ function renderSparkline(){
   }
 }
 
+let _oiTab = 'W'; // W=weekly, M=monthly
+function setOiTab(t){
+  _oiTab=t;
+  const bW=document.getElementById('oiTabW');
+  const bM=document.getElementById('oiTabM');
+  if(bW){bW.style.borderColor=t==='W'?'var(--accent)':'';bW.style.color=t==='W'?'var(--accent)':'';}
+  if(bM){bM.style.borderColor=t==='M'?'var(--blue)':'';bM.style.color=t==='M'?'var(--blue)':'';}
+  renderOI();
+}
+
 function renderMaxPain(){
-  const mp=S.maxPain,p=S.price;
-  if(!mp||!p)return;
-  const d=(mp-p)/p*100;
-  txt('mpV','$'+mp.toLocaleString('en-US'));
-  const de=document.getElementById('mpD');
-  if(de){de.textContent=(d>=0?'+':'')+d.toFixed(1)+'%';de.className='mp-delta '+(d>=0?'pos':'neg');}
-  if(S.maxPainExp){
-    const days=['Вс','Пн','Вт','Ср','Чт','Пт','Сб'];
-    const dayName=days[S.maxPainExp.getUTCDay()];
-    txt('mpE',dayName+' '+S.maxPainExp.toLocaleDateString('ru-RU',{day:'2-digit',month:'short',year:'numeric'})+' 08:00 UTC');
-    const now=Date.now(),left=S.maxPainExp.getTime()-now;
-    const total=S.maxPainExp.getTime()-(now-7*86400*1000);
-    sty('epF','width',Math.max(0,Math.min(100,(1-left/total)*100))+'%');
-    const h=Math.max(0,Math.floor(left/3600000));
-    const m=Math.max(0,Math.floor((left%3600000)/60000));
-    txt('expC',h+'ч '+m+'м');
+  const p=S.price; if(!p) return;
+  // Weekly
+  const mp=S.maxPain;
+  if(mp){
+    const d=(mp-p)/p*100;
+    txt('mpV','$'+mp.toLocaleString('en-US'));
+    const de=document.getElementById('mpD');
+    if(de){de.textContent=(d>=0?'+':'')+d.toFixed(1)+'%';de.style.color=d>=0?'var(--bull)':'var(--bear)';}
+    if(S.maxPainExp){
+      const days=['Вс','Пн','Вт','Ср','Чт','Пт','Сб'];
+      txt('mpE',days[S.maxPainExp.getUTCDay()]+' '+S.maxPainExp.toLocaleDateString('ru-RU',{day:'2-digit',month:'short'})+' 08:00 UTC');
+      const now=Date.now(),left=S.maxPainExp.getTime()-now;
+      const total=S.maxPainExp.getTime()-(now-7*86400*1000);
+      sty('epF','width',Math.max(0,Math.min(100,(1-left/total)*100))+'%');
+      const h=Math.max(0,Math.floor(left/3600000));
+      const m=Math.max(0,Math.floor((left%3600000)/60000));
+      txt('expC',h+'ч '+m+'м');
+    }
+  }
+  // Monthly
+  const mm=S.maxPainMonthly;
+  if(mm){
+    const dm=(mm-p)/p*100;
+    txt('mpMV','$'+mm.toLocaleString('en-US'));
+    const dme=document.getElementById('mpMD');
+    if(dme){dme.textContent=(dm>=0?'+':'')+dm.toFixed(1)+'%';dme.style.color=dm>=0?'var(--bull)':'var(--bear)';}
+    if(S.maxPainMonthlyExp){
+      const days=['Вс','Пн','Вт','Ср','Чт','Пт','Сб'];
+      txt('mpME',days[S.maxPainMonthlyExp.getUTCDay()]+' '+S.maxPainMonthlyExp.toLocaleDateString('ru-RU',{day:'2-digit',month:'short'})+' 08:00 UTC');
+      const now=Date.now(),left=S.maxPainMonthlyExp.getTime()-now;
+      const totalM=S.maxPainMonthlyExp.getTime()-(now-30*86400*1000);
+      sty('epMF','width',Math.max(0,Math.min(100,(1-left/totalM)*100))+'%');
+      const hm=Math.max(0,Math.floor(left/3600000));
+      const mm2=Math.max(0,Math.floor((left%3600000)/60000));
+      txt('expMC',hm+'ч '+mm2+'м');
+    }
+  } else {
+    txt('mpMV','—');
+    txt('mpME','Нет данных');
+    txt('expMC','—');
+    txt('mpMD','—');
   }
 }
 
@@ -987,9 +1088,14 @@ function fmtG(v){const m=v/1e6;return(m>=0?'+':'')+m.toFixed(1)+'M';}
 
 function renderOI(){
   const el=document.getElementById('oiL');if(!el)return;
-  if(!S.oiLevels||!S.oiLevels.length){el.innerHTML='<div style="color:var(--text3);font-size:10px">Загрузка...</div>';return;}
+  const levels = _oiTab==='M' && S.oiMonthly && S.oiMonthly.length
+    ? [...S.oiMonthly.filter(l=>l.strike>S.price).slice(0,5),
+       {strike:Math.round(S.price/500)*500,type:'NOW',oi:0,pct:0,gex:0},
+       ...S.oiMonthly.filter(l=>l.strike<S.price).slice(0,5)].sort((a,b)=>b.strike-a.strike)
+    : S.oiLevels;
+  if(!levels||!levels.length){el.innerHTML='<div style="color:var(--text3);font-size:10px">Загрузка...</div>';return;}
   let h='';
-  for(const lv of S.oiLevels){
+  for(const lv of levels){
     const isFlip=S.gammaFlip>0&&Math.abs(lv.strike-S.gammaFlip)<500&&lv.type!=='NOW';
     if(lv.type==='NOW'){
       h+=`<div class="oi-row now">
