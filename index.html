@@ -505,9 +505,12 @@ function histSave() {
 function histPush() {
   const row = {
     ts: Date.now(), price: S.price,
+    rr1d:  S.vol25.t1d  ? S.vol25.t1d.rr  : 0,
     rr7d:  S.vol25.t7d  ? S.vol25.t7d.rr  : 0,
     rr30d: S.vol25.t30d ? S.vol25.t30d.rr : 0,
     bf7d:  S.vol25.t7d  ? S.vol25.t7d.bf  : 0,
+    atm7d: S.vol25.t7d  ? S.vol25.t7d.atmIV : 0,
+    atm30d:S.vol25.t30d ? S.vol25.t30d.atmIV: 0,
     pcr: S.pcr, ivSkew: S.ivSkew, dvol: S.dvol,
     termStr: S.termStr,
     mpDelta: S.maxPain > 0 ? (S.maxPain - S.price)/S.price*100 : 0,
@@ -1033,147 +1036,138 @@ function renderIVChart() {
   }
 }
 
+// ── Z-score helper for vol25 ─────────────────────────────
+function vs25Z(key) {
+  const vals = S.hist.map(h=>h[key]||0).filter(v=>v!==0);
+  if(vals.length < 15) return null;
+  const m  = vals.reduce((a,b)=>a+b,0)/vals.length;
+  const sd = Math.sqrt(vals.reduce((a,b)=>a+(b-m)**2,0)/vals.length);
+  const cur= S.hist[S.hist.length-1]?.[key] || 0;
+  return sd>1e-10 ? Math.max(-3,Math.min(3,(cur-m)/sd)) : 0;
+}
+
+function zTag25(z, invert) {
+  if(z===null) return '<span style="font-size:8px;color:var(--text3)">накопл.</span>';
+  const v = invert ? -z : z;
+  const col = v>1.5?'var(--bull)':v<-1.5?'var(--bear)':'var(--text2)';
+  const bg  = v>1.5?'var(--bull2)':v<-1.5?'var(--bear2)':'var(--neut2)';
+  return '<span style="font-family:Space Mono,monospace;font-size:8px;padding:1px 5px;border-radius:2px;background:'+bg+';color:'+col+'">'+(v>=0?'+':'')+v.toFixed(1)+'σ</span>';
+}
+
 function renderVolSurface() {
-  const v = S.vol25;
-  if(!v) return;
+  const v = S.vol25; if(!v) return;
 
-  // Helper: render one tenor card
-  function renderCard(elId, d, label, dayLabel) {
-    const el = document.getElementById(elId); if(!el) return;
-    if(!d) { el.innerHTML = '<div style="color:var(--text3);font-size:9px">'+label+'<br>нет данных</div>'; return; }
-    const rrCol = d.rr > 3 ? 'var(--bear)' : d.rr < -1 ? 'var(--bull)' : 'var(--text)';
-    const bfCol = d.bf > 2 ? 'var(--bear)' : 'var(--text2)';
+  // Z-scores
+  const zRR1d  = vs25Z('rr1d');
+  const zRR7d  = vs25Z('rr7d');
+  const zRR30d = vs25Z('rr30d');
+  const zBF7d  = vs25Z('bf7d');
+  const zATM7  = vs25Z('atm7d');
+  const zATM30 = vs25Z('atm30d');
 
-    // Z-scores from history
-    const rrKey = label==='7D'?'rr7d':'rr30d';
-    const rrVals = S.hist.map(h=>h[rrKey]||0).filter(v=>v!==0);
-    let rrZ = null;
-    if(rrVals.length >= 15) {
-      const m=rrVals.reduce((a,b)=>a+b,0)/rrVals.length;
-      const sd=Math.sqrt(rrVals.reduce((a,b)=>a+(b-m)**2,0)/rrVals.length);
-      rrZ = sd>1e-10 ? (d.rr-m)/sd : 0;
-    }
-    const rrZStr = rrZ!==null ? ' (z:'+(rrZ>=0?'+':'')+rrZ.toFixed(1)+'σ)' : '';
-
-    el.innerHTML =
-      '<div style="font-family:Space Mono,monospace;font-size:8px;color:var(--text3);margin-bottom:5px">'+dayLabel+'</div>'+
-      '<div style="font-size:8.5px;color:var(--text2);margin-bottom:2px">ATM IV</div>'+
-      '<div style="font-family:Space Mono,monospace;font-size:16px;font-weight:700;color:var(--text)">'+d.atmIV.toFixed(1)+'%</div>'+
-      '<div style="height:1px;background:var(--border);margin:5px 0"></div>'+
-      '<div style="display:flex;justify-content:space-between;margin-bottom:3px">'+
-        '<span style="font-size:8px;color:var(--text3)">25d RR</span>'+
-        '<span style="font-family:Space Mono,monospace;font-size:9px;font-weight:700;color:'+rrCol+'">'+
-          (d.rr>=0?'+':'')+d.rr.toFixed(1)+'%'+rrZStr+'</span>'+
+  function renderCard(elId, d, rrKey, atmKey, dayLabel) {
+    const el=document.getElementById(elId); if(!el) return;
+    if(!d){el.innerHTML='<div style="color:var(--text3);font-size:9px">'+dayLabel+'<br>нет данных</div>';return;}
+    const zRR  = vs25Z(rrKey);
+    const zATM = vs25Z(atmKey);
+    const rrCol= d.rr>3?'var(--bear)':d.rr<-1?'var(--bull)':'var(--text)';
+    const bfCol= d.bf>2?'var(--bear)':d.bf<0?'var(--bull)':'var(--text2)';
+    el.innerHTML=
+      '<div style="font-family:Space Mono,monospace;font-size:8px;color:var(--accent);margin-bottom:6px;letter-spacing:.08em">'+dayLabel+'</div>'+
+      '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">'+
+        '<span style="font-size:8px;color:var(--text3)">ATM IV</span>'+
+        '<div style="display:flex;align-items:center;gap:5px">'+
+          '<span style="font-family:Space Mono,monospace;font-size:15px;font-weight:700">'+d.atmIV.toFixed(1)+'%</span>'+
+          zTag25(zATM,false)+
+        '</div>'+
       '</div>'+
-      '<div style="display:flex;justify-content:space-between;margin-bottom:3px">'+
+      '<div style="height:1px;background:var(--border);margin:4px 0"></div>'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'+
+        '<span style="font-size:8px;color:var(--text3)">25d RR</span>'+
+        '<div style="display:flex;align-items:center;gap:5px">'+
+          '<span style="font-family:Space Mono,monospace;font-size:10px;font-weight:700;color:'+rrCol+'">'+(d.rr>=0?'+':'')+d.rr.toFixed(1)+'%</span>'+
+          zTag25(zRR,true)+   // inverted: high RR z = puts expensive = bearish
+        '</div>'+
+      '</div>'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'+
         '<span style="font-size:8px;color:var(--text3)">25d BF</span>'+
-        '<span style="font-family:Space Mono,monospace;font-size:9px;color:'+bfCol+'">'+
-          (d.bf>=0?'+':'')+d.bf.toFixed(1)+'%</span>'+
+        '<span style="font-family:Space Mono,monospace;font-size:10px;color:'+bfCol+'">'+(d.bf>=0?'+':'')+d.bf.toFixed(1)+'%</span>'+
       '</div>'+
       '<div style="display:flex;justify-content:space-between">'+
-        '<span style="font-size:7.5px;color:var(--text3)">P/C strikes</span>'+
-        '<span style="font-size:7.5px;color:var(--text3)">'+
-          '$'+d.strike25P.toLocaleString('en-US')+'/$'+d.strike25C.toLocaleString('en-US')+'</span>'+
+        '<span style="font-size:7.5px;color:var(--text3)">25d P / C</span>'+
+        '<span style="font-size:7.5px;color:var(--text3)">$'+d.strike25P.toLocaleString('en-US')+' / $'+d.strike25C.toLocaleString('en-US')+'</span>'+
       '</div>';
   }
 
-  renderCard('vs1d',  v.t1d,  '1D',  '1-DAY');
-  renderCard('vs7d',  v.t7d,  '7D',  '7-DAY');
-  renderCard('vs30d', v.t30d, '30D', '30-DAY');
+  renderCard('vs1d',  v.t1d,  'rr1d',  '',      '1-DAY');
+  renderCard('vs7d',  v.t7d,  'rr7d',  'atm7d', '7-DAY');
+  renderCard('vs30d', v.t30d, 'rr30d', 'atm30d','30-DAY');
 
-  // Term Structure Curve (ATM IV across tenors)
-  const cv = document.getElementById('termCurve'); if(!cv) return;
-  const ctx = cv.getContext('2d');
-  const W = cv.offsetWidth||700, H=90;
-  cv.width=W; cv.height=H;
+  // Term Structure + RR z-score canvas
+  const cv=document.getElementById('termCurve'); if(!cv) return;
+  const ctx=cv.getContext('2d');
+  const W=cv.offsetWidth||700, H=90; cv.width=W; cv.height=H;
   ctx.clearRect(0,0,W,H);
 
-  const pts3 = [
-    {x:W*0.12, iv:v.t1d  ? v.t1d.atmIV  : null, rr:v.t1d  ? v.t1d.rr  : 0, label:'1D'},
-    {x:W*0.50, iv:v.t7d  ? v.t7d.atmIV  : null, rr:v.t7d  ? v.t7d.rr  : 0, label:'7D'},
-    {x:W*0.88, iv:v.t30d ? v.t30d.atmIV : null, rr:v.t30d ? v.t30d.rr : 0, label:'30D'},
+  const pts3=[
+    {x:W*0.15,iv:v.t1d ?v.t1d.atmIV :null,rr:v.t1d ?v.t1d.rr :0,rrZ:zRR1d, lbl:'1D'},
+    {x:W*0.50,iv:v.t7d ?v.t7d.atmIV :null,rr:v.t7d ?v.t7d.rr :0,rrZ:zRR7d, lbl:'7D'},
+    {x:W*0.85,iv:v.t30d?v.t30d.atmIV:null,rr:v.t30d?v.t30d.rr:0,rrZ:zRR30d,lbl:'30D'},
   ].filter(p=>p.iv!==null);
 
-  if(pts3.length < 2) {
-    ctx.fillStyle='rgba(122,130,154,0.4)'; ctx.font='9px Space Mono,monospace'; ctx.textAlign='center';
-    ctx.fillText('Загрузка данных...', W/2, H/2); return;
-  }
+  if(pts3.length<2){ctx.fillStyle='rgba(122,130,154,0.4)';ctx.font='9px Space Mono,monospace';ctx.textAlign='center';ctx.fillText('Загрузка...',W/2,H/2);return;}
 
-  const ivMin = Math.min(...pts3.map(p=>p.iv)) - 3;
-  const ivMax = Math.max(...pts3.map(p=>p.iv)) + 3;
-  const ivY = iv => H-10 - ((iv-ivMin)/(ivMax-ivMin)) * (H-20);
+  const ivMin=Math.min(...pts3.map(p=>p.iv))-4, ivMax=Math.max(...pts3.map(p=>p.iv))+4;
+  const ivY=iv=>H*0.72-((iv-ivMin)/(ivMax-ivMin))*(H*0.60);
 
-  // Grid
-  ctx.strokeStyle='rgba(255,255,255,0.06)'; ctx.lineWidth=0.5; ctx.setLineDash([2,3]);
-  for(let i=0;i<3;i++){const y=H-10-i*(H-20)/2;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
-  ctx.setLineDash([]);
-
-  // ATM IV curve (blue)
-  ctx.beginPath();
-  pts3.forEach((p,i)=>i===0?ctx.moveTo(p.x,ivY(p.iv)):ctx.lineTo(p.x,ivY(p.iv)));
+  // Draw ATM IV area
+  ctx.beginPath(); ctx.moveTo(pts3[0].x,ivY(pts3[0].iv));
+  pts3.forEach(p=>ctx.lineTo(p.x,ivY(p.iv)));
+  ctx.lineTo(pts3[pts3.length-1].x,H*0.72); ctx.lineTo(pts3[0].x,H*0.72); ctx.closePath();
+  ctx.fillStyle='rgba(0,212,255,0.06)'; ctx.fill();
+  ctx.beginPath(); pts3.forEach((p,i)=>i===0?ctx.moveTo(p.x,ivY(p.iv)):ctx.lineTo(p.x,ivY(p.iv)));
   ctx.strokeStyle='var(--accent)'; ctx.lineWidth=2; ctx.stroke();
-
-  // RR line (second y-axis concept — shown as colored bars above/below zero)
-  const rrAll = pts3.map(p=>p.rr);
-  const rrMax = Math.max(...rrAll.map(Math.abs), 2);
-  const rrY0 = H*0.55; // zero line for RR
-  const rrScale = (H*0.35) / rrMax;
-  pts3.forEach(p => {
-    const bh = p.rr * rrScale;
-    ctx.fillStyle = p.rr > 0 ? 'rgba(255,61,90,0.5)' : 'rgba(0,232,122,0.5)';
-    ctx.fillRect(p.x-12, bh>0?rrY0-bh:rrY0, 24, Math.abs(bh));
+  pts3.forEach(p=>{
+    ctx.beginPath();ctx.arc(p.x,ivY(p.iv),4,0,Math.PI*2);ctx.fillStyle='var(--accent)';ctx.fill();
+    ctx.fillStyle='rgba(0,212,255,0.9)';ctx.font='bold 9px Space Mono,monospace';ctx.textAlign='center';
+    ctx.fillText(p.iv.toFixed(1)+'%',p.x,ivY(p.iv)-7);
   });
 
-  // Dots and labels for ATM IV
-  pts3.forEach(p => {
-    ctx.beginPath(); ctx.arc(p.x,ivY(p.iv),4,0,Math.PI*2);
-    ctx.fillStyle='var(--accent)'; ctx.fill();
-    ctx.fillStyle='rgba(0,212,255,0.9)'; ctx.font='bold 9px Space Mono,monospace'; ctx.textAlign='center';
-    ctx.fillText(p.iv.toFixed(1)+'%', p.x, ivY(p.iv)-7);
-    ctx.fillStyle='rgba(255,255,255,0.3)'; ctx.font='8px Space Mono,monospace';
-    ctx.fillText(p.label, p.x, H-1);
+  // RR bars with z-score coloring
+  const rrMx=Math.max(...pts3.map(p=>Math.abs(p.rr)),2);
+  const rrBase=H*0.88, rrSc=(H*0.14)/rrMx;
+  pts3.forEach(p=>{
+    const bh=Math.abs(p.rr)*rrSc;
+    const alpha=p.rrZ!==null?(0.4+Math.min(0.5,Math.abs(p.rrZ)*0.2)):0.5;
+    ctx.fillStyle=p.rr>0?'rgba(255,61,90,'+alpha+')':'rgba(0,232,122,'+alpha+')';
+    ctx.fillRect(p.x-14,p.rr>0?rrBase-bh:rrBase,28,bh);
+    ctx.fillStyle='rgba(255,255,255,0.5)';ctx.font='8px Space Mono,monospace';ctx.textAlign='center';
+    ctx.fillText((p.rr>=0?'+':'')+p.rr.toFixed(1),p.x,p.rr>0?rrBase-bh-3:rrBase+bh+9);
+    if(p.rrZ!==null){
+      const zc=Math.abs(p.rrZ)>1.5?'rgba(255,200,50,0.9)':'rgba(255,255,255,0.3)';
+      ctx.fillStyle=zc;ctx.font='7px Space Mono,monospace';
+      ctx.fillText('z:'+(p.rrZ>=0?'+':'')+p.rrZ.toFixed(1),p.x,H-1);
+    }
+    ctx.fillStyle='rgba(255,255,255,0.35)';ctx.font='8px Space Mono,monospace';
+    ctx.fillText(p.lbl,p.x,H*(p.rr>0?0.76:0.78));
   });
-
-  // Legend
-  ctx.fillStyle='rgba(0,212,255,0.7)'; ctx.fillRect(8,4,12,3);
-  ctx.fillStyle='rgba(255,255,255,0.4)'; ctx.font='8px Space Mono,monospace'; ctx.textAlign='left';
-  ctx.fillText('ATM IV', 24, 10);
-  ctx.fillStyle='rgba(255,61,90,0.6)'; ctx.fillRect(75,4,10,8);
-  ctx.fillStyle='rgba(255,255,255,0.4)'; ctx.fillText('RR+', 89, 10);
-  ctx.fillStyle='rgba(0,232,122,0.6)'; ctx.fillRect(110,4,10,8);
-  ctx.fillStyle='rgba(255,255,255,0.4)'; ctx.fillText('RR−', 124, 10);
 
   // Interpretation
-  const rrBox = document.getElementById('rrInterpBox'); if(!rrBox) return;
-  const rr7  = v.t7d  ? v.t7d.rr  : null;
-  const rr30 = v.t30d ? v.t30d.rr : null;
-  const atm7  = v.t7d  ? v.t7d.atmIV  : null;
-  const atm30 = v.t30d ? v.t30d.atmIV : null;
-
-  let msg='', msgColor='var(--text2)';
-  if(rr7!==null && rr30!==null) {
-    const rrSpread = rr7 - rr30;
-    if(atm7!==null && atm30!==null && atm7 > atm30 + 3) {
-      msg='⚠ Term Structure ИНВЕРТИРОВАНА (краткосрочный страх выше). Острый риск-офф.';
-      msgColor='var(--bear)';
-    } else if(rr7 > 5 && rr30 > 3) {
-      msg='⚠ Puts дорогие на всех тенорах. Устойчивый bearish sentiment. Структурный страх.';
-      msgColor='var(--bear)';
-    } else if(rrSpread > 3) {
-      msg='★ Краткосрочный страх выше долгосрочного (7d RR >> 30d RR). Event spike = buy.';
-      msgColor='var(--bull)';
-    } else if(rr7 < 0 && rr30 < 0) {
-      msg='★ Calls дороже puts на всех тенорах. Bullish sentiment профи. Leading bullish.';
-      msgColor='var(--bull)';
-    } else if(rr7 < 0 && rr30 > 1) {
-      msg='★ Краткосрочно bullish, долгосрочно cautious. Возможный разворот вверх.';
-      msgColor='var(--bull)';
-    } else {
-      msg='Нейтральный режим. Нет явного перекоса в стоимости опционов.';
-      msgColor='var(--text2)';
-    }
-  } else { msg='Накопление данных...'; }
-  rrBox.innerHTML = '<div style="font-size:9px;color:'+msgColor+';font-family:DM Sans,sans-serif">'+msg+'</div>';
+  const rrBox=document.getElementById('rrInterpBox'); if(!rrBox) return;
+  const rr7=v.t7d?v.t7d.rr:null, rr30=v.t30d?v.t30d.rr:null;
+  const atm7=v.t7d?v.t7d.atmIV:null, atm30=v.t30d?v.t30d.atmIV:null;
+  let msg='',col='var(--text2)';
+  if(rr7!==null&&rr30!==null){
+    const spread=rr7-rr30;
+    const zSpike=zRR7d!==null&&(zRR30d===null||Math.abs(zRR7d)>Math.abs(zRR30d)+0.8);
+    if(atm7&&atm30&&atm7>atm30+3){msg='⚠ Term Structure ИНВЕРТИРОВАНА. Острый краткосрочный страх.';col='var(--bear)';}
+    else if(zRR7d!==null&&zRR7d>2&&(zRR30d===null||zRR30d<1)){msg='★ 7d RR spike (+'+zRR7d.toFixed(1)+'σ) — краткосрочная паника. Contrarian BULLISH.';col='var(--bull)';}
+    else if(zRR7d!==null&&zRR30d!==null&&zRR7d>1.5&&zRR30d>1.5){msg='⚠ RR высокий на всех тенорах (структурный страх). Осторожно.';col='var(--bear)';}
+    else if(rr7<0&&rr30<0){msg='★ Calls дороже puts везде. Bullish sentiment профи.';col='var(--bull)';}
+    else if(spread>3&&zSpike){msg='★ Краткосрочный страх >> долгосрочного. Event spike = покупай.';col='var(--bull)';}
+    else{msg='Нейтральный режим vol surface.';col='var(--text2)';}
+  } else {msg='Накопление z-score (нужно 15+ точек)...';col='var(--text3)';}
+  rrBox.innerHTML='<div style="font-size:9px;color:'+col+';font-family:DM Sans,sans-serif">'+msg+'</div>';
 }
 
 function renderAll() {
@@ -2023,37 +2017,106 @@ function drawFsGenChart(cv){
     const def = COMP_DEFS[idx];
     if(def) drawFsSingleComp(ctx, W, H, def);
   } else if(_fsGenMode==='vol25'){
-    // Full-screen Vol Surface: term structure + RR across expiries
     ctx.clearRect(0,0,W,H);
-    const v=S.vol25; if(!v){ctx.fillStyle='rgba(122,130,154,0.5)';ctx.font='14px Space Mono,monospace';ctx.textAlign='center';ctx.fillText('Загрузка...',W/2,H/2);return;}
-    const tenors=[{d:v.t1d,lbl:'1D'},{d:v.t7d,lbl:'7D'},{d:v.t30d,lbl:'30D'}].filter(t=>t.d);
-    if(tenors.length<2){ctx.fillStyle='rgba(122,130,154,0.5)';ctx.font='14px Space Mono,monospace';ctx.textAlign='center';ctx.fillText('Недостаточно данных',W/2,H/2);return;}
-    const xs=[W*0.15,W*0.5,W*0.85];
-    // ATM IV line
+    const v=S.vol25;
+    if(!v){ctx.fillStyle='rgba(122,130,154,0.5)';ctx.font='14px Space Mono,monospace';ctx.textAlign='center';ctx.fillText('Загрузка...',W/2,H/2);return;}
+    const allT=[{d:v.t1d,lbl:'1D',rrKey:'rr1d'},{d:v.t7d,lbl:'7D',rrKey:'rr7d'},{d:v.t30d,lbl:'30D',rrKey:'rr30d'}];
+    const tenors=allT.filter(t=>t.d);
+    if(tenors.length<1){ctx.fillStyle='rgba(122,130,154,0.5)';ctx.font='14px Space Mono,monospace';ctx.textAlign='center';ctx.fillText('Недостаточно данных',W/2,H/2);return;}
+
+    // Layout: top half = ATM IV term structure, bottom half = RR z-score bars
+    const topH=H*0.55, botH=H*0.40, botY=H*0.58;
+    const nT=tenors.length;
+    const colW=W/(nT+1);
+    const xs=tenors.map((_,i)=>colW*(i+1));
+
+    // ── ATM IV term structure ──────────────────────────
     const atmVals=tenors.map(t=>t.d.atmIV);
-    const ivMn=Math.min(...atmVals)-5, ivMx=Math.max(...atmVals)+5;
-    const ivY2=iv=>H*0.7-((iv-ivMn)/(ivMx-ivMn))*(H*0.55);
-    // Grid
-    ctx.strokeStyle='rgba(255,255,255,0.08)';ctx.lineWidth=0.5;ctx.setLineDash([4,5]);
-    for(let i=0;i<=4;i++){const iv=ivMn+i*(ivMx-ivMn)/4;const y=ivY2(iv);ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();ctx.fillStyle='rgba(255,255,255,0.3)';ctx.font='11px Space Mono,monospace';ctx.textAlign='left';ctx.fillText(iv.toFixed(0)+'%',4,y-3);}
+    const ivMn=Math.min(...atmVals)-5, ivMx=Math.max(...atmVals)+8;
+    const ivY2=iv=>topH*0.85-((iv-ivMn)/(ivMx-ivMn))*(topH*0.65);
+
+    // Grid lines for IV
+    ctx.strokeStyle='rgba(255,255,255,0.07)';ctx.lineWidth=0.6;ctx.setLineDash([4,5]);
+    for(let i=0;i<=4;i++){
+      const iv=ivMn+i*(ivMx-ivMn)/4;const y=ivY2(iv);
+      ctx.beginPath();ctx.moveTo(50,y);ctx.lineTo(W-20,y);ctx.stroke();
+      ctx.fillStyle='rgba(255,255,255,0.3)';ctx.font='11px Space Mono,monospace';ctx.textAlign='left';
+      ctx.fillText(iv.toFixed(0)+'%',4,y+4);
+    }
     ctx.setLineDash([]);
-    // ATM IV area fill
-    ctx.beginPath();ctx.moveTo(xs[0],ivY2(tenors[0].d.atmIV));
-    tenors.forEach((t,i)=>ctx.lineTo(xs[i],ivY2(t.d.atmIV)));
-    ctx.lineTo(xs[tenors.length-1],H*0.7);ctx.lineTo(xs[0],H*0.7);ctx.closePath();
-    ctx.fillStyle='rgba(0,212,255,0.08)';ctx.fill();
-    ctx.beginPath();tenors.forEach((t,i)=>i===0?ctx.moveTo(xs[i],ivY2(t.d.atmIV)):ctx.lineTo(xs[i],ivY2(t.d.atmIV)));
-    ctx.strokeStyle='var(--accent)';ctx.lineWidth=3;ctx.stroke();
-    tenors.forEach((t,i)=>{ctx.beginPath();ctx.arc(xs[i],ivY2(t.d.atmIV),7,0,Math.PI*2);ctx.fillStyle='var(--accent)';ctx.fill();ctx.fillStyle='var(--bg)';ctx.font='bold 10px Space Mono,monospace';ctx.textAlign='center';ctx.fillText(t.d.atmIV.toFixed(0),xs[i],ivY2(t.d.atmIV)+4);});
-    // RR bars
-    const rrAll=tenors.map(t=>Math.abs(t.d.rr));const rrMx=Math.max(...rrAll,3);
-    const rrBase=H*0.88,rrSc=(H*0.15)/rrMx;
-    tenors.forEach((t,i)=>{const bh=Math.abs(t.d.rr)*rrSc;ctx.fillStyle=t.d.rr>0?'rgba(255,61,90,0.7)':'rgba(0,232,122,0.7)';ctx.fillRect(xs[i]-30,t.d.rr>0?rrBase-bh:rrBase,60,bh);ctx.fillStyle='rgba(255,255,255,0.6)';ctx.font='bold 11px Space Mono,monospace';ctx.textAlign='center';ctx.fillText((t.d.rr>=0?'+':'')+t.d.rr.toFixed(1)+'%',xs[i],t.d.rr>0?rrBase-bh-4:rrBase+bh+12);});
+
+    // ATM IV fill + line
+    if(tenors.length>1){
+      ctx.beginPath();ctx.moveTo(xs[0],ivY2(tenors[0].d.atmIV));
+      tenors.forEach((t,i)=>ctx.lineTo(xs[i],ivY2(t.d.atmIV)));
+      ctx.lineTo(xs[tenors.length-1],topH*0.85);ctx.lineTo(xs[0],topH*0.85);ctx.closePath();
+      ctx.fillStyle='rgba(0,212,255,0.09)';ctx.fill();
+      ctx.beginPath();tenors.forEach((t,i)=>i===0?ctx.moveTo(xs[i],ivY2(t.d.atmIV)):ctx.lineTo(xs[i],ivY2(t.d.atmIV)));
+      ctx.strokeStyle='var(--accent)';ctx.lineWidth=3;ctx.stroke();
+    }
+    // Dots + IV labels
+    tenors.forEach((t,i)=>{
+      ctx.beginPath();ctx.arc(xs[i],ivY2(t.d.atmIV),8,0,Math.PI*2);
+      ctx.fillStyle='var(--accent)';ctx.fill();
+      ctx.fillStyle='rgba(8,10,14,0.9)';ctx.font='bold 10px Space Mono,monospace';ctx.textAlign='center';
+      ctx.fillText(t.d.atmIV.toFixed(0),xs[i],ivY2(t.d.atmIV)+4);
+      ctx.fillStyle='rgba(0,212,255,0.9)';ctx.font='bold 13px Space Mono,monospace';
+      ctx.fillText(t.d.atmIV.toFixed(1)+'%',xs[i],ivY2(t.d.atmIV)-16);
+      ctx.fillStyle='rgba(255,255,255,0.5)';ctx.font='13px Space Mono,monospace';
+      ctx.fillText(t.lbl,xs[i],topH*0.93);
+    });
+
+    // ── RR + z-score bars ──────────────────────────────
+    const rrMx=Math.max(...tenors.map(t=>Math.abs(t.d.rr)),3);
+    const rrScale=(botH*0.38)/rrMx;
+    const rrBase=botY+botH*0.45;
+
+    // Zero line for RR
+    ctx.strokeStyle='rgba(255,255,255,0.2)';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(20,rrBase);ctx.lineTo(W-20,rrBase);ctx.stroke();
+    ctx.fillStyle='rgba(255,255,255,0.3)';ctx.font='10px Space Mono,monospace';ctx.textAlign='right';
+    ctx.fillText('RR=0',18,rrBase+4);
+
+    tenors.forEach((t,i)=>{
+      const bh=Math.abs(t.d.rr)*rrScale;
+      const zv=vs25Z(t.rrKey);
+      const alpha=zv!==null?Math.min(0.85,0.45+Math.abs(zv)*0.15):0.55;
+      const isPos=t.d.rr>0;
+      ctx.fillStyle=isPos?'rgba(255,61,90,'+alpha+')':'rgba(0,232,122,'+alpha+')';
+      ctx.fillRect(xs[i]-35,isPos?rrBase-bh:rrBase,70,bh);
+
+      // RR value
+      ctx.fillStyle=isPos?'rgba(255,130,130,0.95)':'rgba(100,240,150,0.95)';
+      ctx.font='bold 14px Space Mono,monospace';ctx.textAlign='center';
+      ctx.fillText((t.d.rr>=0?'+':'')+t.d.rr.toFixed(1)+'%',xs[i],isPos?rrBase-bh-8:rrBase+bh+18);
+
+      // Z-score badge
+      if(zv!==null){
+        const zcol=Math.abs(zv)>2?'rgba(255,220,50,1)':Math.abs(zv)>1?'rgba(255,255,255,0.8)':'rgba(255,255,255,0.4)';
+        ctx.fillStyle=zcol;ctx.font=(Math.abs(zv)>1.5?'bold ':'')+'12px Space Mono,monospace';
+        ctx.fillText('z:'+(zv>=0?'+':'')+zv.toFixed(1)+'σ',xs[i],isPos?rrBase-bh-26:rrBase+bh+36);
+      }
+
+      // Put IV / Call IV breakdown
+      ctx.fillStyle='rgba(255,255,255,0.4)';ctx.font='10px Space Mono,monospace';
+      ctx.fillText('P:'+t.d.iv25P.toFixed(0)+'% C:'+t.d.iv25C.toFixed(0)+'%',xs[i],botY+botH*0.92);
+    });
+
+    // Divider
+    ctx.strokeStyle='rgba(255,255,255,0.1)';ctx.lineWidth=1;ctx.setLineDash([4,4]);
+    ctx.beginPath();ctx.moveTo(0,topH+6);ctx.lineTo(W,topH+6);ctx.stroke();ctx.setLineDash([]);
+
     // Labels
-    tenors.forEach((t,i)=>{ctx.fillStyle='rgba(255,255,255,0.5)';ctx.font='13px Space Mono,monospace';ctx.textAlign='center';ctx.fillText(t.lbl,xs[i],H-8);});
-    // Title labels
-    ctx.fillStyle='rgba(0,212,255,0.8)';ctx.font='bold 13px Space Mono,monospace';ctx.textAlign='left';ctx.fillText('ATM IMPLIED VOLATILITY + 25-DELTA RISK REVERSAL',16,22);
-    ctx.fillStyle='rgba(255,255,255,0.35)';ctx.font='11px Space Mono,monospace';ctx.fillText('RR = 25d Put IV - 25d Call IV  |  RR+ = Put дороже (fear)  |  RR- = Call дороже (bullish)',16,40);
+    ctx.fillStyle='rgba(0,212,255,0.7)';ctx.font='bold 12px Space Mono,monospace';ctx.textAlign='left';
+    ctx.fillText('ATM IMPLIED VOLATILITY — TERM STRUCTURE',12,18);
+    ctx.fillStyle='rgba(255,255,255,0.35)';ctx.font='11px Space Mono,monospace';
+    ctx.fillText('25-DELTA RISK REVERSAL (RR = Put IV - Call IV) + Z-SCORE',12,botY+14);
+    ctx.fillStyle='rgba(255,61,90,0.7)';ctx.fillRect(12,botY+20,14,10);
+    ctx.fillStyle='rgba(255,255,255,0.4)';ctx.font='10px Space Mono,monospace';
+    ctx.fillText('RR+ = Puts дороже (fear)',30,botY+29);
+    ctx.fillStyle='rgba(0,232,122,0.7)';ctx.fillRect(W/2,botY+20,14,10);
+    ctx.fillStyle='rgba(255,255,255,0.4)';
+    ctx.fillText('RR− = Calls дороже (bullish)',W/2+18,botY+29);
   } else if(_fsGenMode==='comp'){
     // All components in one big chart
     ctx.clearRect(0,0,W,H);
