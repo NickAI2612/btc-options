@@ -288,7 +288,7 @@ canvas#fsChart{width:100%;height:100%;display:block}
         <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
           <span style="font-size:8.5px;color:#ff9500;font-family:'Space Mono',monospace">● PCR</span>
           <span style="font-size:8.5px;color:rgba(100,190,255,0.9);font-family:'Space Mono',monospace">● IV7</span>
-          <span style="font-size:8.5px;color:rgba(30,90,220,0.9);font-family:'Space Mono',monospace">● IV30</span>
+          <span style="font-size:8.5px;color:rgba(60,130,255,0.9);font-family:'Space Mono',monospace;border-bottom:1px dashed rgba(60,130,255,0.7)">--- IV30</span>
           <span style="font-size:8.5px;color:#ab47bc;font-family:'Space Mono',monospace">● IV Skew</span>
           <span style="font-size:8.5px;color:#00e87a;font-family:'Space Mono',monospace;font-weight:700">● Composite</span>
         </div>
@@ -304,36 +304,6 @@ canvas#fsChart{width:100%;height:100%;display:block}
         <span style="font-size:7.5px;color:var(--text3);font-family:'Space Mono',monospace">0</span>
         <span style="font-size:7.5px;color:var(--text3);font-family:'Space Mono',monospace">+1σ</span>
         <span style="font-size:7.5px;color:var(--text3);font-family:'Space Mono',monospace">+2σ</span>
-      </div>
-    </div>
-  </div>
-
-  <div class="sec" style="margin-top:8px">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-      <div class="lbl" style="margin-bottom:0">IV7 vs IV30 — Спред волатильности</div>
-      <button class="expand-btn" onclick="openFsGeneric('iv')">⤢ ПОЛНЫЙ ЭКРАН</button>
-    </div>
-    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:5px;padding:10px 12px 8px">
-      <div style="display:flex;gap:16px;margin-bottom:6px;align-items:center">
-        <span style="font-size:8px;color:rgba(100,190,255,0.9);font-family:'Space Mono',monospace">● IV7 (быстрый 7д)</span>
-        <span style="font-size:8px;color:rgba(30,90,220,0.9);font-family:'Space Mono',monospace">● IV30 (режим 30д)</span>
-        <span style="font-size:8px;color:var(--text3);font-family:'Space Mono',monospace" id="ivSpreadSign"></span>
-      </div>
-      <canvas id="ivChart" height="100" style="width:100%;display:block"></canvas>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
-        <div style="background:var(--bg3);border-radius:4px;padding:7px 10px">
-          <div style="font-family:'Space Mono',monospace;font-size:7.5px;color:rgba(100,190,255,0.8);margin-bottom:3px">IV7 Z-SCORE</div>
-          <div style="font-family:'Space Mono',monospace;font-size:18px;font-weight:700" id="iv7val">—</div>
-          <div style="font-size:8px;color:var(--text3);margin-top:2px">7-дневный страх</div>
-        </div>
-        <div style="background:var(--bg3);border-radius:4px;padding:7px 10px">
-          <div style="font-family:'Space Mono',monospace;font-size:7.5px;color:rgba(30,90,220,0.8);margin-bottom:3px">IV30 Z-SCORE</div>
-          <div style="font-family:'Space Mono',monospace;font-size:18px;font-weight:700" id="iv30val">—</div>
-          <div style="font-size:8px;color:var(--text3);margin-top:2px">30-дневный режим</div>
-        </div>
-      </div>
-      <div style="margin-top:8px;padding:6px 10px;background:var(--bg3);border-radius:4px;font-size:9px;color:var(--text2);font-family:'DM Sans',sans-serif" id="ivInterpBox">
-        Накопление данных...
       </div>
     </div>
   </div>
@@ -1523,12 +1493,22 @@ function drawSingleZ(ctx, W, H, key, inv, win, color, dash) {
   const tMn=pts[0].ts,tMx=pts[pts.length-1].ts||tMn+1;
   const tX=t=>((t-tMn)/(tMx-tMn||1))*(W-8)+4;
   const tY=v=>H/2-(v/3)*(H/2-4);
-  // Grid
-  ctx.strokeStyle='rgba(255,255,255,0.06)'; ctx.lineWidth=0.5; ctx.setLineDash([2,3]);
-  [-2,-1,1,2].forEach(z=>{const y=tY(z);ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();});
-  ctx.setLineDash([]);
-  ctx.strokeStyle='rgba(255,255,255,0.15)'; ctx.lineWidth=0.8;
-  ctx.beginPath();ctx.moveTo(0,H/2);ctx.lineTo(W,H/2);ctx.stroke();
+  // Mini MLZ-style zones
+  const ymZ=v=>H/2-(v/3)*(H/2-4);
+  const ym2p=ymZ(2),ym1p=ymZ(1),ym0=ymZ(0),ym1n=ymZ(-1),ym2n=ymZ(-2);
+  ctx.fillStyle='rgba(0,232,122,0.12)';ctx.fillRect(0,0,W,ym2p);
+  ctx.fillStyle='rgba(0,232,122,0.05)';ctx.fillRect(0,ym2p,W,ym1p-ym2p);
+  ctx.fillStyle='rgba(255,61,90,0.05)';ctx.fillRect(0,ym1n,W,ym2n-ym1n);
+  ctx.fillStyle='rgba(255,61,90,0.12)';ctx.fillRect(0,ym2n,W,H-ym2n);
+  // ±2σ lines (colored, visible)
+  [[2,'rgba(0,232,122,0.7)'],[1,'rgba(255,255,255,0.2)'],[-1,'rgba(255,255,255,0.2)'],[-2,'rgba(255,61,90,0.7)']].forEach(([z,col])=>{
+    const y=ymZ(z);ctx.strokeStyle=col;ctx.lineWidth=Math.abs(z)===2?1.0:0.6;
+    ctx.setLineDash(Math.abs(z)===2?[3,2]:[2,3]);
+    ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();ctx.setLineDash([]);
+  });
+  // Zero line
+  ctx.strokeStyle='rgba(255,255,255,0.25)';ctx.lineWidth=0.8;ctx.setLineDash([]);
+  ctx.beginPath();ctx.moveTo(0,ym0);ctx.lineTo(W,ym0);ctx.stroke();
   // Fill under curve
   const lv=valid[valid.length-1].v;
   const gr=ctx.createLinearGradient(0,0,0,H);
@@ -1648,24 +1628,28 @@ function drawFsSingleComp(ctx, W, H, def) {
   const tMn = pts[0].ts, tMx = pts[n-1].ts || tMn+1;
   const tX  = t => ((t-tMn)/(tMx-tMn||1)) * (W-24) + 12;
   const tY  = v => H/2 - (v/3) * (H/2 - 20);
-  // Grid
-  for(let z = -3; z <= 3; z++) {
-    const y = tY(z);
-    ctx.strokeStyle = z===0 ? 'rgba(255,255,255,0.2)' : Math.abs(z)===2 ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.05)';
-    ctx.lineWidth = z===0 ? 1.5 : 0.6;
-    ctx.setLineDash(z===0 ? [] : [4,5]);
-    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
-    ctx.setLineDash([]);
-    if(z !== 0) {
-      ctx.fillStyle = 'rgba(255,255,255,0.3)';
-      ctx.font = '10px Space Mono,monospace';
-      ctx.textAlign = 'left';
-      ctx.fillText((z>0?'+':'')+z+'σ', 4, y-4);
-    }
-  }
-  // Zone fills
-  ctx.fillStyle = 'rgba(0,232,122,0.05)'; ctx.fillRect(0, 20, W, tY(1)-20);
-  ctx.fillStyle = 'rgba(255,61,90,0.05)'; ctx.fillRect(0, tY(-1), W, H-tY(-1));
+  // MLZ-style sigma zones
+  const yZ=v=>H/2-(v/3)*(H/2-20);
+  const yz3p=yZ(3),yz2p=yZ(2),yz1p=yZ(1),yz0=yZ(0),yz1n=yZ(-1),yz2n=yZ(-2),yz3n=yZ(-3);
+  ctx.fillStyle='rgba(0,232,122,0.13)';ctx.fillRect(0,yz3p,W,yz2p-yz3p);
+  ctx.fillStyle='rgba(0,232,122,0.07)';ctx.fillRect(0,yz2p,W,yz1p-yz2p);
+  ctx.fillStyle='rgba(0,232,122,0.02)';ctx.fillRect(0,yz1p,W,yz0-yz1p);
+  ctx.fillStyle='rgba(255,61,90,0.02)';ctx.fillRect(0,yz0,W,yz1n-yz0);
+  ctx.fillStyle='rgba(255,61,90,0.07)';ctx.fillRect(0,yz1n,W,yz2n-yz1n);
+  ctx.fillStyle='rgba(255,61,90,0.13)';ctx.fillRect(0,yz2n,W,yz3n-yz2n);
+  // Sigma lines
+  [-3,-2,-1,0,1,2,3].forEach(z=>{
+    const y=yZ(z);
+    if(z===0){ctx.strokeStyle='rgba(255,255,255,0.35)';ctx.lineWidth=1.5;ctx.setLineDash([]);}
+    else if(Math.abs(z)===1){ctx.strokeStyle='rgba(255,255,255,0.25)';ctx.lineWidth=1.0;ctx.setLineDash([6,4]);}
+    else if(Math.abs(z)===2){ctx.strokeStyle=z>0?'rgba(0,232,122,0.6)':'rgba(255,61,90,0.6)';ctx.lineWidth=1.2;ctx.setLineDash([4,3]);}
+    else{ctx.strokeStyle=z>0?'rgba(0,232,122,0.3)':'rgba(255,61,90,0.3)';ctx.lineWidth=0.7;ctx.setLineDash([2,4]);}
+    ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();ctx.setLineDash([]);
+    const lbl=(z>0?'+':'')+z+'σ';
+    const fc=Math.abs(z)===2?(z>0?'rgba(0,232,122,0.85)':'rgba(255,61,90,0.85)'):'rgba(255,255,255,0.4)';
+    ctx.fillStyle=fc;ctx.font=(Math.abs(z)===2?'bold ':'')+'10px Space Mono,monospace';
+    ctx.textAlign='right';ctx.fillText(lbl,W-4,y+(z>0?-4:12));
+  });
   // Gradient fill under curve
   const lv = valid[valid.length-1].v;
   const gr = ctx.createLinearGradient(0,0,0,H);
@@ -1850,27 +1834,49 @@ function drawZChart(canvasId, H) {
   const cut = 0; // show ALL available history
   const pts = S.hist.filter(d => d.ts > cut);
 
-  // Grid
-  for (let z = -3; z <= 3; z++) {
-    const y = H/2 - (z/3)*(H/2-16);
-    ctx.strokeStyle = z===0 ? 'rgba(255,255,255,0.2)' : Math.abs(z)===2 ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.05)';
-    ctx.lineWidth = z===0 ? 1.2 : 0.6;
-    ctx.setLineDash(z===0 ? [] : Math.abs(z)===1 ? [4,5] : [2,4]);
+  // MLZ-style sigma zones and grid
+  const sigmas = [-3,-2,-1,0,1,2,3];
+  const yOf = z => H/2 - (z/3)*(H/2-16);
+  const y3p=yOf(3),y2p=yOf(2),y1p=yOf(1),y0=yOf(0),y1n=yOf(-1),y2n=yOf(-2),y3n=yOf(-3);
+
+  // Colored zone fills (MLZ style)
+  ctx.fillStyle='rgba(0,232,122,0.13)';  ctx.fillRect(0,y3p,W,y2p-y3p); // >+2σ strong green
+  ctx.fillStyle='rgba(0,232,122,0.07)';  ctx.fillRect(0,y2p,W,y1p-y2p); // +1 to +2σ light green
+  ctx.fillStyle='rgba(0,232,122,0.02)';  ctx.fillRect(0,y1p,W,y0-y1p);  // 0 to +1σ very light
+  ctx.fillStyle='rgba(255,61,90,0.02)';  ctx.fillRect(0,y0, W,y1n-y0);  // -1 to 0σ very light
+  ctx.fillStyle='rgba(255,61,90,0.07)';  ctx.fillRect(0,y1n,W,y2n-y1n); // -1 to -2σ light red
+  ctx.fillStyle='rgba(255,61,90,0.13)';  ctx.fillRect(0,y2n,W,y3n-y2n); // <-2σ strong red
+
+  // Sigma lines (MLZ style: bright dashed with labels on right)
+  sigmas.forEach(z => {
+    const y = yOf(z);
+    if(z===0){
+      ctx.strokeStyle='rgba(255,255,255,0.35)'; ctx.lineWidth=1.5; ctx.setLineDash([]);
+    } else if(Math.abs(z)===1){
+      ctx.strokeStyle='rgba(255,255,255,0.25)'; ctx.lineWidth=1.0; ctx.setLineDash([6,4]);
+    } else if(Math.abs(z)===2){
+      ctx.strokeStyle=z>0?'rgba(0,232,122,0.6)':'rgba(255,61,90,0.6)';
+      ctx.lineWidth=1.2; ctx.setLineDash([4,3]);
+    } else {
+      ctx.strokeStyle=z>0?'rgba(0,232,122,0.3)':'rgba(255,61,90,0.3)';
+      ctx.lineWidth=0.7; ctx.setLineDash([2,4]);
+    }
     ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
     ctx.setLineDash([]);
-    if (z !== 0) {
-      ctx.fillStyle = Math.abs(z)===2 ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.2)';
-      ctx.font = '9px Space Mono, monospace'; ctx.textAlign = 'left';
-      ctx.fillText((z>0?'+':'')+z+'σ', 4, y-3);
+    // Labels on RIGHT side (like MLZ)
+    if(z!==0){
+      const lbl=(z>0?'+':'')+z+'σ';
+      const fc=Math.abs(z)===2?(z>0?'rgba(0,232,122,0.85)':'rgba(255,61,90,0.85)'):'rgba(255,255,255,0.4)';
+      ctx.fillStyle=fc;
+      ctx.font=(Math.abs(z)===2?'bold ':'')+'9px Space Mono,monospace';
+      ctx.textAlign='right';
+      ctx.fillText(lbl,W-4,y+(z>0?-3:11));
+    } else {
+      ctx.fillStyle='rgba(255,255,255,0.35)';
+      ctx.font='9px Space Mono,monospace'; ctx.textAlign='right';
+      ctx.fillText('0',W-4,y-3);
     }
-  }
-  // Threshold bands
-  const y2p = H/2-(2/3)*(H/2-16), y1p = H/2-(1/3)*(H/2-16);
-  const y1n = H/2+(1/3)*(H/2-16), y2n = H/2+(2/3)*(H/2-16);
-  ctx.fillStyle='rgba(0,232,122,0.05)'; ctx.fillRect(0,16,W,y2p-16);
-  ctx.fillStyle='rgba(0,232,122,0.03)'; ctx.fillRect(0,y2p,W,y1p-y2p);
-  ctx.fillStyle='rgba(255,61,90,0.03)'; ctx.fillRect(0,y1n,W,y2n-y1n);
-  ctx.fillStyle='rgba(255,61,90,0.05)'; ctx.fillRect(0,y2n,W,H-y2n);
+  });
 
   if (pts.length < 2) {
     ctx.fillStyle='rgba(122,130,154,0.5)';
