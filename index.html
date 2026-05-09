@@ -311,7 +311,7 @@ canvas#fsChart{width:100%;height:100%;display:block}
   <div class="sec" style="margin-top:8px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
       <div class="lbl" style="margin-bottom:0">IV7 vs IV30 — Спред волатильности</div>
-      <div style="font-size:8px;color:var(--text3);font-family:'Space Mono',monospace" id="ivSpreadVal"></div>
+      <button class="expand-btn" onclick="openFsGeneric('iv')">⤢ ПОЛНЫЙ ЭКРАН</button>
     </div>
     <div style="background:var(--bg2);border:1px solid var(--border);border-radius:5px;padding:10px 12px 8px">
       <div style="display:flex;gap:16px;margin-bottom:6px;align-items:center">
@@ -336,6 +336,14 @@ canvas#fsChart{width:100%;height:100%;display:block}
         Накопление данных...
       </div>
     </div>
+  </div>
+
+  <div class="sec" style="margin-top:8px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <div class="lbl" style="margin-bottom:0">Компоненты — Z-Score по отдельности</div>
+      <button class="expand-btn" onclick="openFsGeneric('comp')">⤢ ВСЕ КОМПОНЕНТЫ</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px" id="compGrid"></div>
   </div>
 
   <div class="sec" style="margin-top:8px">
@@ -894,14 +902,16 @@ function renderIVChart() {
     ctx.fill();
   }
 
-  // Draw IV30 first (darker, below)
+  // Draw IV30 (dashed dark blue)
   ctx.beginPath();let st=false;
   for(let i=0;i<n;i++){
     if(iv30pts[i].v===null){st=false;continue;}
     const x=tX(pts[i].ts),y=tY(iv30pts[i].v);
     if(!st){ctx.moveTo(x,y);st=true;}else ctx.lineTo(x,y);
   }
-  ctx.strokeStyle='rgba(30,90,220,0.9)'; ctx.lineWidth=1.8; ctx.stroke();
+  ctx.setLineDash([6,3]);
+  ctx.strokeStyle='rgba(60,130,255,0.95)'; ctx.lineWidth=2.2; ctx.stroke();
+  ctx.setLineDash([]);
 
   // Draw IV7 on top (brighter)
   ctx.beginPath();st=false;
@@ -958,6 +968,7 @@ function renderAll() {
   try { renderGauges(); } catch(e){}
   try { renderSparklineMini(); } catch(e){}
   try { renderIVChart(); } catch(e){}
+  try { renderCompGrid(); } catch(e){}
   try { renderMaxPain(); } catch(e){}
   try { renderOI(); } catch(e){}
   try { renderMetrics(); } catch(e){}
@@ -1481,6 +1492,346 @@ function loadTg(){
 async function doRefresh(){setDot('loading');txt('updT','Обновление...');await loadData();}
 
 // ═══ INIT ═════════════════════════════════════════════════
+// ─── COMPONENT CHART RENDERER ────────────────────────────
+const COMP_DEFS = [
+  {key:'pcr',   label:'PCR',       color:'rgba(255,149,0,0.9)',   inv:true},
+  {key:'ivSkew',label:'IV Skew',   color:'rgba(171,71,188,0.9)',  inv:true},
+  {key:'dvol',  label:'IV7',       color:'rgba(100,190,255,0.9)', inv:true,  win:'z7'},
+  {key:'dvol',  label:'IV30',      color:'rgba(60,130,255,0.9)',  inv:true,  win:'z30', dash:true},
+  {key:'termStr',label:'Term Str.',color:'rgba(233,30,99,0.85)',  inv:true},
+  {key:'funding',label:'Funding',  color:'rgba(76,175,80,0.85)',  inv:true},
+];
+
+function drawSingleZ(ctx, W, H, key, inv, win, color, dash) {
+  ctx.clearRect(0,0,W,H);
+  const pts = S.hist; if(pts.length<3) return;
+  const vals = pts.map(d=>d[key]||0);
+  const WIN = win==='z30'?Math.min(pts.length,10080):Math.min(pts.length,2016);
+  function rolZ(arr,cur,w){
+    const sl=arr.slice(Math.max(0,arr.length-w));
+    if(sl.length<3)return null;
+    const m=sl.reduce((a,b)=>a+b,0)/sl.length;
+    const sd=Math.sqrt(sl.reduce((a,b)=>a+(b-m)**2,0)/sl.length);
+    return sd<1e-10?0:Math.max(-3,Math.min(3,(cur-m)/sd));
+  }
+  const zpts = pts.map((d,i)=>{
+    const z=rolZ(vals.slice(0,i+1),vals[i],Math.min(i+1,WIN));
+    return{ts:d.ts,v:z!==null?(inv?-z:z):null};
+  });
+  const valid = zpts.filter(p=>p.v!==null);
+  if(valid.length<2)return;
+  const tMn=pts[0].ts,tMx=pts[pts.length-1].ts||tMn+1;
+  const tX=t=>((t-tMn)/(tMx-tMn||1))*(W-8)+4;
+  const tY=v=>H/2-(v/3)*(H/2-4);
+  // Grid
+  ctx.strokeStyle='rgba(255,255,255,0.06)'; ctx.lineWidth=0.5; ctx.setLineDash([2,3]);
+  [-2,-1,1,2].forEach(z=>{const y=tY(z);ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();});
+  ctx.setLineDash([]);
+  ctx.strokeStyle='rgba(255,255,255,0.15)'; ctx.lineWidth=0.8;
+  ctx.beginPath();ctx.moveTo(0,H/2);ctx.lineTo(W,H/2);ctx.stroke();
+  // Fill under curve
+  const lv=valid[valid.length-1].v;
+  const gr=ctx.createLinearGradient(0,0,0,H);
+  if(lv>0){gr.addColorStop(0,color.replace('0.9','0.2').replace('0.85','0.2'));gr.addColorStop(1,color.replace('0.9','0').replace('0.85','0'));}
+  else{gr.addColorStop(0,color.replace('0.9','0').replace('0.85','0'));gr.addColorStop(1,'rgba(255,61,90,0.12)');}
+  ctx.beginPath();ctx.moveTo(tX(valid[0].ts),H/2);
+  valid.forEach(p=>ctx.lineTo(tX(p.ts),tY(p.v)));
+  ctx.lineTo(tX(valid[valid.length-1].ts),H/2);ctx.closePath();ctx.fillStyle=gr;ctx.fill();
+  // Line
+  if(dash) ctx.setLineDash([5,3]);
+  ctx.beginPath();let st=false;
+  for(const p of zpts){if(p.v===null){st=false;continue;}const x=tX(p.ts),y=tY(p.v);if(!st){ctx.moveTo(x,y);st=true;}else ctx.lineTo(x,y);}
+  ctx.strokeStyle=color; ctx.lineWidth=1.5; ctx.stroke();
+  ctx.setLineDash([]);
+  // Dot
+  ctx.beginPath();ctx.arc(tX(valid[valid.length-1].ts),tY(lv),3,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();
+}
+
+function getCompZ(def) {
+  // Get current z-score value for a component definition
+  const pts = S.hist; if(pts.length < 3) return null;
+  const vals = pts.map(d => d[def.key] || 0);
+  const cur  = vals[vals.length-1];
+  const win  = def.win === 'z30' ? Math.min(pts.length, 10080) : Math.min(pts.length, 2016);
+  const slice = vals.slice(-win);
+  if(slice.length < 3) return null;
+  const m  = slice.reduce((a,b)=>a+b,0)/slice.length;
+  const sd = Math.sqrt(slice.reduce((a,b)=>a+(b-m)**2,0)/slice.length);
+  if(sd < 1e-10) return 0;
+  const z = (cur - m) / sd;
+  return def.inv ? -z : z;
+}
+
+function renderCompGrid() {
+  const grid = document.getElementById('compGrid');
+  if(!grid) return;
+  grid.innerHTML = '';
+  COMP_DEFS.forEach((def, idx) => {
+    const id  = 'cmpCv_' + idx;
+    const zv  = getCompZ(def);
+    const zvStr = zv !== null ? (zv >= 0 ? '+' : '') + zv.toFixed(2) + 'σ' : 'накопл.';
+    const col = zv !== null ? (zv > 1 ? 'var(--bull)' : zv < -1 ? 'var(--bear)' : 'var(--text2)') : 'var(--text3)';
+    const div = document.createElement('div');
+    div.style.cssText = 'background:var(--bg2);border:1px solid var(--border);border-radius:5px;padding:8px;cursor:pointer';
+    div.title = def.label + ' z-score история';
+    div.onclick = () => openFsComponent(idx);
+    div.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
+        '<span style="font-family:Space Mono,monospace;font-size:8px;color:' + def.color + '">' + def.label + '</span>' +
+        '<div style="display:flex;align-items:center;gap:6px">' +
+          '<span style="font-family:Space Mono,monospace;font-size:11px;font-weight:700;color:' + col + '">' + zvStr + '</span>' +
+          '<span style="font-size:8px;color:var(--text3)">⤢</span>' +
+        '</div>' +
+      '</div>' +
+      '<canvas id="' + id + '" height="52" style="width:100%;display:block"></canvas>';
+    grid.appendChild(div);
+  });
+  // Draw charts after DOM settles
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      COMP_DEFS.forEach((def, idx) => {
+        const cv = document.getElementById('cmpCv_' + idx);
+        if(!cv) return;
+        const ctx = cv.getContext('2d');
+        const W = cv.parentElement.offsetWidth - 16 || 200;
+        cv.width  = W;
+        cv.height = 52;
+        drawSingleZ(ctx, W, 52, def.key, def.inv, def.win, def.color, def.dash);
+      });
+    });
+  });
+}
+
+function openFsComponent(idx) {
+  _fsGenMode = 'single_' + idx;
+  const def = COMP_DEFS[idx];
+  const ov  = document.getElementById('fsGenOverlay'); if(!ov) return;
+  ov.classList.add('open');
+  const title  = document.getElementById('fsGenTitle');
+  const legend = document.getElementById('fsGenLegend');
+  if(title)  title.textContent  = def.label.toUpperCase() + ' — Z-SCORE ИСТОРИЯ';
+  if(legend) legend.innerHTML   = '<span style="font-size:9px;color:' + def.color + ';font-family:Space Mono,monospace">● ' + def.label + (def.dash?' (пунктир)':'') + '</span>';
+  setTimeout(() => {
+    const cv = document.getElementById('fsGenChart'); if(!cv) return;
+    cv.width  = cv.parentElement.offsetWidth;
+    cv.height = cv.parentElement.offsetHeight;
+    drawFsSingleComp(cv.getContext('2d'), cv.width, cv.height, def);
+  }, 50);
+}
+
+function drawFsSingleComp(ctx, W, H, def) {
+  ctx.clearRect(0, 0, W, H);
+  const pts = S.hist;
+  if(pts.length < 3) {
+    ctx.fillStyle = 'rgba(122,130,154,0.5)';
+    ctx.font = '12px Space Mono,monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('Накопление данных (' + pts.length + ' точек)...', W/2, H/2);
+    return;
+  }
+  const vals = pts.map(d => d[def.key] || 0);
+  const WIN  = def.win === 'z30' ? Math.min(pts.length, 10080) : Math.min(pts.length, 2016);
+  function rolZ(arr, cur, win) {
+    const sl = arr.slice(Math.max(0, arr.length - win));
+    if(sl.length < 3) return null;
+    const m  = sl.reduce((a,b)=>a+b,0) / sl.length;
+    const sd = Math.sqrt(sl.reduce((a,b)=>a+(b-m)**2,0) / sl.length);
+    return sd < 1e-10 ? 0 : Math.max(-3, Math.min(3, (cur-m)/sd));
+  }
+  const zpts = pts.map((d,i) => {
+    const z = rolZ(vals.slice(0,i+1), vals[i], Math.min(i+1, WIN));
+    return { ts: d.ts, v: z !== null ? (def.inv ? -z : z) : null };
+  });
+  const valid = zpts.filter(p => p.v !== null);
+  if(valid.length < 2) return;
+  const n   = pts.length;
+  const tMn = pts[0].ts, tMx = pts[n-1].ts || tMn+1;
+  const tX  = t => ((t-tMn)/(tMx-tMn||1)) * (W-24) + 12;
+  const tY  = v => H/2 - (v/3) * (H/2 - 20);
+  // Grid
+  for(let z = -3; z <= 3; z++) {
+    const y = tY(z);
+    ctx.strokeStyle = z===0 ? 'rgba(255,255,255,0.2)' : Math.abs(z)===2 ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.05)';
+    ctx.lineWidth = z===0 ? 1.5 : 0.6;
+    ctx.setLineDash(z===0 ? [] : [4,5]);
+    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
+    ctx.setLineDash([]);
+    if(z !== 0) {
+      ctx.fillStyle = 'rgba(255,255,255,0.3)';
+      ctx.font = '10px Space Mono,monospace';
+      ctx.textAlign = 'left';
+      ctx.fillText((z>0?'+':'')+z+'σ', 4, y-4);
+    }
+  }
+  // Zone fills
+  ctx.fillStyle = 'rgba(0,232,122,0.05)'; ctx.fillRect(0, 20, W, tY(1)-20);
+  ctx.fillStyle = 'rgba(255,61,90,0.05)'; ctx.fillRect(0, tY(-1), W, H-tY(-1));
+  // Gradient fill under curve
+  const lv = valid[valid.length-1].v;
+  const gr = ctx.createLinearGradient(0,0,0,H);
+  if(lv > 0) {
+    gr.addColorStop(0, def.color.replace(/[\d.]+\)$/, '0.25)'));
+    gr.addColorStop(1, def.color.replace(/[\d.]+\)$/, '0)'));
+  } else {
+    gr.addColorStop(0, def.color.replace(/[\d.]+\)$/, '0)'));
+    gr.addColorStop(1, 'rgba(255,61,90,0.15)');
+  }
+  ctx.beginPath();
+  ctx.moveTo(tX(valid[0].ts), H/2);
+  valid.forEach(p => ctx.lineTo(tX(p.ts), tY(p.v)));
+  ctx.lineTo(tX(valid[valid.length-1].ts), H/2);
+  ctx.closePath(); ctx.fillStyle = gr; ctx.fill();
+  // Line
+  if(def.dash) ctx.setLineDash([8,4]);
+  ctx.beginPath(); let st = false;
+  for(const p of zpts) {
+    if(p.v===null){st=false;continue;}
+    const x=tX(p.ts), y=tY(p.v);
+    if(!st){ctx.moveTo(x,y);st=true;} else ctx.lineTo(x,y);
+  }
+  ctx.strokeStyle = def.color; ctx.lineWidth = 2.5; ctx.stroke();
+  ctx.setLineDash([]);
+  // Current dot
+  ctx.beginPath(); ctx.arc(tX(valid[valid.length-1].ts), tY(lv), 5, 0, Math.PI*2);
+  ctx.fillStyle = def.color; ctx.fill();
+  // Current value label
+  ctx.fillStyle = def.color;
+  ctx.font = 'bold 14px Space Mono,monospace';
+  ctx.textAlign = 'right';
+  ctx.fillText((lv>=0?'+':'')+lv.toFixed(2)+'σ', W-8, 24);
+  // Time labels
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.font = '9px Space Mono,monospace';
+  ctx.textAlign = 'center';
+  const steps = Math.min(10, pts.length);
+  for(let i = 0; i < steps; i++) {
+    const idx2 = Math.floor(i/(steps-1)*(pts.length-1));
+    const d2 = new Date(pts[idx2].ts);
+    ctx.fillText(d2.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}), tX(pts[idx2].ts), H-6);
+  }
+}
+
+// ─── GENERIC FULLSCREEN ───────────────────────────────────
+let _fsGenMode = 'iv'; // 'iv' or 'comp' or index 0-5
+function openFsGeneric(mode) {
+  _fsGenMode = mode;
+  const ov=document.getElementById('fsGenOverlay');if(!ov)return;
+  ov.classList.add('open');
+  const title=document.getElementById('fsGenTitle');
+  const legend=document.getElementById('fsGenLegend');
+  if(mode==='iv'){
+    if(title)title.textContent='IV7 vs IV30 — СПРЕД ВОЛАТИЛЬНОСТИ';
+    if(legend)legend.innerHTML=`<span style="font-size:9px;color:rgba(100,190,255,0.9);font-family:'Space Mono',monospace">— IV7 (7д)</span>
+      <span style="font-size:9px;color:rgba(60,130,255,0.9);font-family:'Space Mono',monospace">--- IV30 (30д)</span>`;
+  } else if(mode==='comp'){
+    if(title)title.textContent='ВСЕ КОМПОНЕНТЫ — Z-SCORE';
+    if(legend)legend.innerHTML=COMP_DEFS.map(d=>`<span style="font-size:9px;color:${d.color};font-family:'Space Mono',monospace">● ${d.label}</span>`).join('');
+  }
+  setTimeout(()=>{
+    const cv=document.getElementById('fsGenChart');if(!cv)return;
+    cv.width=cv.parentElement.offsetWidth;cv.height=cv.parentElement.offsetHeight;
+    drawFsGenChart(cv);
+  },50);
+}
+function closeFsGen(){const ov=document.getElementById('fsGenOverlay');if(ov)ov.classList.remove('open');}
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeFs();closeFsGen();}});
+
+function drawFsGenChart(cv){
+  const ctx=cv.getContext('2d'); const W=cv.width,H=cv.height;
+  if(_fsGenMode==='iv'){
+    // Big IV7 vs IV30
+    ctx.clearRect(0,0,W,H);
+    const pts=S.hist; if(pts.length<3){ctx.fillStyle='rgba(122,130,154,0.5)';ctx.font='12px Space Mono,monospace';ctx.textAlign='center';ctx.fillText('Накопление данных...',W/2,H/2);return;}
+    const dvolV=pts.map(d=>d.dvol);
+    const WIN7=Math.min(pts.length,2016),WIN30=Math.min(pts.length,10080);
+    function rolZ(arr,cur,win){const sl=arr.slice(Math.max(0,arr.length-win));if(sl.length<3)return null;const m=sl.reduce((a,b)=>a+b,0)/sl.length;const sd=Math.sqrt(sl.reduce((a,b)=>a+(b-m)**2,0)/sl.length);return sd<1e-10?0:Math.max(-3,Math.min(3,(cur-m)/sd));}
+    const iv7d=pts.map((d,i)=>{const z=rolZ(dvolV.slice(0,i+1),d.dvol,Math.min(i+1,WIN7));return{ts:d.ts,v:z!==null?-z:null};});
+    const iv30d=pts.map((d,i)=>{const z=rolZ(dvolV.slice(0,i+1),d.dvol,Math.min(i+1,WIN30));return{ts:d.ts,v:z!==null?-z:null};});
+    const n=pts.length;
+    const tMn=pts[0].ts,tMx=pts[n-1].ts||tMn+1;
+    const tX=t=>((t-tMn)/(tMx-tMn||1))*(W-24)+12;
+    const tY=v=>H/2-(v/3)*(H/2-20);
+    // Grid
+    for(let z=-3;z<=3;z++){
+      const y=tY(z);
+      ctx.strokeStyle=z===0?'rgba(255,255,255,0.2)':Math.abs(z)===2?'rgba(255,255,255,0.1)':'rgba(255,255,255,0.05)';
+      ctx.lineWidth=z===0?1.5:0.6; ctx.setLineDash(z===0?[]:[4,5]);
+      ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();
+      ctx.setLineDash([]);
+      if(z!==0){ctx.fillStyle='rgba(255,255,255,0.3)';ctx.font='10px Space Mono,monospace';ctx.textAlign='left';ctx.fillText((z>0?'+':'')+z+'σ',4,y-4);}
+    }
+    // Fill
+    const valid=pts.reduce((acc,_,i)=>{if(iv7d[i].v!==null&&iv30d[i].v!==null)acc.push(i);return acc;},[]);
+    if(valid.length>=2){
+      ctx.beginPath();ctx.moveTo(tX(pts[valid[0]].ts),tY(iv7d[valid[0]].v));
+      valid.forEach(i=>ctx.lineTo(tX(pts[i].ts),tY(iv7d[i].v)));
+      valid.slice().reverse().forEach(i=>ctx.lineTo(tX(pts[i].ts),tY(iv30d[i].v)));
+      ctx.closePath();
+      const ld=iv7d[valid[valid.length-1]].v-iv30d[valid[valid.length-1]].v;
+      ctx.fillStyle=ld>0.1?'rgba(0,232,122,0.22)':ld<-0.1?'rgba(255,61,90,0.2)':'rgba(74,85,120,0.15)';
+      ctx.fill();
+    }
+    // IV30 dashed
+    ctx.beginPath();let st=false;
+    for(let i=0;i<n;i++){if(iv30d[i].v===null){st=false;continue;}const x=tX(pts[i].ts),y=tY(iv30d[i].v);if(!st){ctx.moveTo(x,y);st=true;}else ctx.lineTo(x,y);}
+    ctx.setLineDash([8,4]);ctx.strokeStyle='rgba(60,130,255,0.95)';ctx.lineWidth=2.5;ctx.stroke();ctx.setLineDash([]);
+    // IV7 solid
+    ctx.beginPath();st=false;
+    for(let i=0;i<n;i++){if(iv7d[i].v===null){st=false;continue;}const x=tX(pts[i].ts),y=tY(iv7d[i].v);if(!st){ctx.moveTo(x,y);st=true;}else ctx.lineTo(x,y);}
+    ctx.strokeStyle='rgba(100,190,255,1)';ctx.lineWidth=2.5;ctx.stroke();
+    // Time labels
+    ctx.fillStyle='rgba(255,255,255,0.3)';ctx.font='9px Space Mono,monospace';ctx.textAlign='center';
+    const steps=Math.min(10,pts.length);
+    for(let i=0;i<steps;i++){const idx=Math.floor(i/(steps-1)*(pts.length-1));const d=new Date(pts[idx].ts);ctx.fillText(d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}),tX(pts[idx].ts),H-6);}
+  } else if(_fsGenMode.startsWith('single_')) {
+    const idx = parseInt(_fsGenMode.split('_')[1]);
+    const def = COMP_DEFS[idx];
+    if(def) drawFsSingleComp(ctx, W, H, def);
+  } else if(_fsGenMode==='comp'){
+    // All components in one big chart
+    ctx.clearRect(0,0,W,H);
+    const pts=S.hist; if(pts.length<3){ctx.fillStyle='rgba(122,130,154,0.5)';ctx.font='12px Space Mono,monospace';ctx.textAlign='center';ctx.fillText('Накопление данных...',W/2,H/2);return;}
+    const n=pts.length;
+    const tMn=pts[0].ts,tMx=pts[n-1].ts||tMn+1;
+    const tX=t=>((t-tMn)/(tMx-tMn||1))*(W-24)+12;
+    const tY=v=>H/2-(v/3)*(H/2-20);
+    function rolZ(arr,cur,win){const sl=arr.slice(Math.max(0,arr.length-win));if(sl.length<3)return null;const m=sl.reduce((a,b)=>a+b,0)/sl.length;const sd=Math.sqrt(sl.reduce((a,b)=>a+(b-m)**2,0)/sl.length);return sd<1e-10?0:Math.max(-3,Math.min(3,(cur-m)/sd));}
+    // Grid
+    for(let z=-3;z<=3;z++){
+      const y=tY(z);ctx.strokeStyle=z===0?'rgba(255,255,255,0.2)':'rgba(255,255,255,0.06)';
+      ctx.lineWidth=z===0?1.2:0.5;ctx.setLineDash(z===0?[]:[3,4]);
+      ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();ctx.setLineDash([]);
+      if(z!==0){ctx.fillStyle='rgba(255,255,255,0.25)';ctx.font='9px Space Mono,monospace';ctx.textAlign='left';ctx.fillText((z>0?'+':'')+z+'σ',4,y-3);}
+    }
+    const WIN=Math.min(n,2016);
+    COMP_DEFS.forEach(def=>{
+      const vals=pts.map(d=>d[def.key]||0);
+      const wn=def.win==='z30'?Math.min(n,10080):WIN;
+      const zd=pts.map((d,i)=>{const z=rolZ(vals.slice(0,i+1),vals[i],Math.min(i+1,wn));return{ts:d.ts,v:z!==null?(def.inv?-z:z):null};});
+      if(def.dash)ctx.setLineDash([6,3]);
+      ctx.beginPath();let st=false;
+      for(const p of zd){if(p.v===null){st=false;continue;}const x=tX(p.ts),y=tY(p.v);if(!st){ctx.moveTo(x,y);st=true;}else ctx.lineTo(x,y);}
+      ctx.strokeStyle=def.color;ctx.lineWidth=1.5;ctx.stroke();ctx.setLineDash([]);
+    });
+    // Composite bold
+    const compSeries=pts.map((d,i)=>{
+      let sv=0,cnt=0;
+      COMP_DEFS.forEach(def=>{
+        const vals=pts.map(p=>p[def.key]||0);
+        const wn=def.win==='z30'?Math.min(n,10080):WIN;
+        const z=rolZ(vals.slice(0,i+1),vals[i],Math.min(i+1,wn));
+        if(z!==null){sv+=(def.inv?-z:z)*(1/COMP_DEFS.length);cnt++;}
+      });
+      return{ts:d.ts,v:cnt>0?Math.max(-3,Math.min(3,sv)):null};
+    });
+    ctx.beginPath();let st=false;
+    for(const p of compSeries){if(p.v===null){st=false;continue;}const x=tX(p.ts),y=tY(p.v);if(!st){ctx.moveTo(x,y);st=true;}else ctx.lineTo(x,y);}
+    const lv2=compSeries.filter(p=>p.v!==null).slice(-1)[0]?.v||0;
+    ctx.strokeStyle=lv2>0.3?'rgba(0,232,122,0.95)':lv2<-0.3?'rgba(255,61,90,0.95)':'rgba(200,200,200,0.7)';
+    ctx.lineWidth=2.5;ctx.stroke();
+  }
+}
+
 histLoad();
 loadTg();
 sbLoad();
@@ -1694,6 +2045,21 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeFs(); });  /
 setInterval(loadData, REFRESH_MS);
 setInterval(morning, 60000);
 </script>
+<!-- GENERIC FULLSCREEN MODAL -->
+<div class="fs-overlay" id="fsGenOverlay" onclick="if(event.target.id==='fsGenOverlay')closeFsGen()">
+  <div class="fs-hdr">
+    <div class="fs-title" id="fsGenTitle">Z-SCORE</div>
+    <div class="fs-legend" id="fsGenLegend"></div>
+    <button class="fs-close" onclick="closeFsGen()">✕ ЗАКРЫТЬ (ESC)</button>
+  </div>
+  <div class="fs-body">
+    <canvas id="fsGenChart"></canvas>
+  </div>
+  <div class="fs-scale" id="fsGenScale">
+    <span>-3σ</span><span>-2σ</span><span>-1σ</span><span>0</span><span>+1σ</span><span>+2σ</span><span>+3σ</span>
+  </div>
+</div>
+
 <!-- FULLSCREEN Z-SCORE MODAL -->
 <div class="fs-overlay" id="fsOverlay" onclick="closeFsIfBg(event)">
   <div class="fs-hdr">
