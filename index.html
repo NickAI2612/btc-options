@@ -309,6 +309,36 @@ canvas#fsChart{width:100%;height:100%;display:block}
   </div>
 
   <div class="sec" style="margin-top:8px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <div class="lbl" style="margin-bottom:0">IV7 vs IV30 — Спред волатильности</div>
+      <div style="font-size:8px;color:var(--text3);font-family:'Space Mono',monospace" id="ivSpreadVal"></div>
+    </div>
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:5px;padding:10px 12px 8px">
+      <div style="display:flex;gap:16px;margin-bottom:6px;align-items:center">
+        <span style="font-size:8px;color:rgba(100,190,255,0.9);font-family:'Space Mono',monospace">● IV7 (быстрый 7д)</span>
+        <span style="font-size:8px;color:rgba(30,90,220,0.9);font-family:'Space Mono',monospace">● IV30 (режим 30д)</span>
+        <span style="font-size:8px;color:var(--text3);font-family:'Space Mono',monospace" id="ivSpreadSign"></span>
+      </div>
+      <canvas id="ivChart" height="100" style="width:100%;display:block"></canvas>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+        <div style="background:var(--bg3);border-radius:4px;padding:7px 10px">
+          <div style="font-family:'Space Mono',monospace;font-size:7.5px;color:rgba(100,190,255,0.8);margin-bottom:3px">IV7 Z-SCORE</div>
+          <div style="font-family:'Space Mono',monospace;font-size:18px;font-weight:700" id="iv7val">—</div>
+          <div style="font-size:8px;color:var(--text3);margin-top:2px">7-дневный страх</div>
+        </div>
+        <div style="background:var(--bg3);border-radius:4px;padding:7px 10px">
+          <div style="font-family:'Space Mono',monospace;font-size:7.5px;color:rgba(30,90,220,0.8);margin-bottom:3px">IV30 Z-SCORE</div>
+          <div style="font-family:'Space Mono',monospace;font-size:18px;font-weight:700" id="iv30val">—</div>
+          <div style="font-size:8px;color:var(--text3);margin-top:2px">30-дневный режим</div>
+        </div>
+      </div>
+      <div style="margin-top:8px;padding:6px 10px;background:var(--bg3);border-radius:4px;font-size:9px;color:var(--text2);font-family:'DM Sans',sans-serif" id="ivInterpBox">
+        Накопление данных...
+      </div>
+    </div>
+  </div>
+
+  <div class="sec" style="margin-top:8px">
     <div class="lbl">Метрики опционного рынка</div>
     <div class="m2" id="mGrid">—</div>
   </div>
@@ -796,11 +826,138 @@ function computeComposite() {
 }
 
 // ═══ RENDER ═══════════════════════════════════════════════
+function renderIVChart() {
+  const canvas = document.getElementById('ivChart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.offsetWidth || 700, H = 100;
+  canvas.width = W; canvas.height = H;
+  ctx.clearRect(0, 0, W, H);
+
+  // Get data
+  const pts = S.hist;
+  if (pts.length < 3) {
+    ctx.fillStyle = 'rgba(122,130,154,0.4)';
+    ctx.font = '9px Space Mono,monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('Накопление...', W/2, H/2+4);
+    return;
+  }
+
+  const dvolV = pts.map(d=>d.dvol);
+  const WIN7  = Math.min(pts.length, 2016);
+  const WIN30 = Math.min(pts.length, 10080);
+
+  function rolZ(arr,cur,win){
+    const sl=arr.slice(Math.max(0,arr.length-win));
+    if(sl.length<3)return null;
+    const m=sl.reduce((a,b)=>a+b,0)/sl.length;
+    const sd=Math.sqrt(sl.reduce((a,b)=>a+(b-m)**2,0)/sl.length);
+    return sd<1e-10?0:Math.max(-3,Math.min(3,(cur-m)/sd));
+  }
+
+  const iv7pts  = pts.map((d,i)=>{const z=rolZ(dvolV.slice(0,i+1),d.dvol,Math.min(i+1,WIN7));  return{ts:d.ts,v:z!==null?-z:null};});
+  const iv30pts = pts.map((d,i)=>{const z=rolZ(dvolV.slice(0,i+1),d.dvol,Math.min(i+1,WIN30)); return{ts:d.ts,v:z!==null?-z:null};});
+
+  const n = pts.length;
+  const tMn = pts[0].ts, tMx = pts[n-1].ts||tMn+1;
+  const tX = t=>((t-tMn)/(tMx-tMn||1))*(W-16)+8;
+  const tY = v=>H/2-(v/3)*(H/2-8);
+
+  // Grid lines
+  ctx.strokeStyle='rgba(255,255,255,0.08)'; ctx.lineWidth=0.5;
+  ctx.setLineDash([3,4]);
+  [-2,-1,1,2].forEach(z=>{const y=tY(z);ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();});
+  ctx.setLineDash([]);
+  ctx.strokeStyle='rgba(255,255,255,0.2)'; ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(0,H/2);ctx.lineTo(W,H/2);ctx.stroke();
+
+  // Zone labels
+  ctx.fillStyle='rgba(255,255,255,0.2)'; ctx.font='7px Space Mono,monospace'; ctx.textAlign='left';
+  ctx.fillText('+2σ',2,tY(2)-2);ctx.fillText('+1σ',2,tY(1)-2);
+  ctx.fillText('-1σ',2,tY(-1)+9);ctx.fillText('-2σ',2,tY(-2)+9);
+
+  // Fill between IV7 and IV30
+  const valid = pts.reduce((acc,_,i)=>{
+    if(iv7pts[i].v!==null && iv30pts[i].v!==null) acc.push(i);
+    return acc;
+  },[]);
+
+  if(valid.length>=2){
+    ctx.beginPath();
+    ctx.moveTo(tX(pts[valid[0]].ts), tY(iv7pts[valid[0]].v));
+    valid.forEach(i=>ctx.lineTo(tX(pts[i].ts), tY(iv7pts[i].v)));
+    valid.slice().reverse().forEach(i=>ctx.lineTo(tX(pts[i].ts), tY(iv30pts[i].v)));
+    ctx.closePath();
+    const lastDiff = iv7pts[valid[valid.length-1]].v - iv30pts[valid[valid.length-1]].v;
+    ctx.fillStyle = lastDiff>0.1?'rgba(0,232,122,0.3)':lastDiff<-0.1?'rgba(255,61,90,0.28)':'rgba(74,85,120,0.2)';
+    ctx.fill();
+  }
+
+  // Draw IV30 first (darker, below)
+  ctx.beginPath();let st=false;
+  for(let i=0;i<n;i++){
+    if(iv30pts[i].v===null){st=false;continue;}
+    const x=tX(pts[i].ts),y=tY(iv30pts[i].v);
+    if(!st){ctx.moveTo(x,y);st=true;}else ctx.lineTo(x,y);
+  }
+  ctx.strokeStyle='rgba(30,90,220,0.9)'; ctx.lineWidth=1.8; ctx.stroke();
+
+  // Draw IV7 on top (brighter)
+  ctx.beginPath();st=false;
+  for(let i=0;i<n;i++){
+    if(iv7pts[i].v===null){st=false;continue;}
+    const x=tX(pts[i].ts),y=tY(iv7pts[i].v);
+    if(!st){ctx.moveTo(x,y);st=true;}else ctx.lineTo(x,y);
+  }
+  ctx.strokeStyle='rgba(100,190,255,0.95)'; ctx.lineWidth=1.8; ctx.stroke();
+
+  // Current value dots
+  const lv7 =iv7pts[valid[valid.length-1]];
+  const lv30=iv30pts[valid[valid.length-1]];
+  if(lv7){ctx.beginPath();ctx.arc(tX(lv7.ts),tY(lv7.v),4,0,Math.PI*2);ctx.fillStyle='rgba(100,190,255,1)';ctx.fill();}
+  if(lv30){ctx.beginPath();ctx.arc(tX(lv30.ts),tY(lv30.v),4,0,Math.PI*2);ctx.fillStyle='rgba(30,90,220,1)';ctx.fill();}
+
+  // Update value displays
+  const dd = S.scores['_dvol'];
+  const iv7z  = dd&&dd.z7 !==null ? (-dd.z7).toFixed(2)  : null;
+  const iv30z = dd&&dd.z30!==null ? (-dd.z30).toFixed(2) : null;
+  const iv7el =document.getElementById('iv7val');
+  const iv30el=document.getElementById('iv30val');
+  const spEl  =document.getElementById('ivSpreadSign');
+  const intEl =document.getElementById('ivInterpBox');
+  if(iv7el&&iv7z!==null){
+    iv7el.textContent=(parseFloat(iv7z)>=0?'+':'')+iv7z+'σ';
+    iv7el.style.color=parseFloat(iv7z)>1?'var(--bull)':parseFloat(iv7z)<-1?'var(--bear)':'var(--text)';
+  }
+  if(iv30el&&iv30z!==null){
+    iv30el.textContent=(parseFloat(iv30z)>=0?'+':'')+iv30z+'σ';
+    iv30el.style.color=parseFloat(iv30z)>1?'var(--bull)':parseFloat(iv30z)<-1?'var(--bear)':'var(--text)';
+  }
+  if(spEl&&iv7z&&iv30z){
+    const sp=parseFloat(iv7z)-parseFloat(iv30z);
+    spEl.textContent='Спред: '+(sp>=0?'+':'')+sp.toFixed(2)+'σ';
+    spEl.style.color=sp>0.3?'var(--bull)':sp<-0.3?'var(--bear)':'var(--text3)';
+  }
+  if(intEl&&iv7z&&iv30z){
+    const v7=parseFloat(iv7z), v30=parseFloat(iv30z), sp=v7-v30;
+    let msg='';
+    if(sp>0.5&&v30<0.5)       msg='★ IV7 SPIKE — краткосрочная паника на спокойном фоне. Contrarian BULLISH.';
+    else if(v7>1&&v30>1)       msg='⚠ Режимный страх — оба высокие. Устойчивая волатильность. Осторожно.';
+    else if(v7<-0.5&&v30<-0.5) msg='⚡ IV COMPRESSION — оба низкие. Готовься к взрывному движению.';
+    else if(sp<-0.5)            msg='IV30 > IV7 — долгосрочный страх выше краткосрочного. Структурный риск.';
+    else if(v7>0.5&&sp>0)       msg='IV7 растёт быстрее IV30. Наблюдай: spike или начало режима?';
+    else                        msg='Нейтральный режим. Нет аномалии в волатильности.';
+    intEl.textContent=msg;
+  }
+}
+
 function renderAll() {
   try { renderHeader(); } catch(e){}
   try { renderComposite(); } catch(e){}
   try { renderGauges(); } catch(e){}
   try { renderSparklineMini(); } catch(e){}
+  try { renderIVChart(); } catch(e){}
   try { renderMaxPain(); } catch(e){}
   try { renderOI(); } catch(e){}
   try { renderMetrics(); } catch(e){}
@@ -1413,7 +1570,7 @@ function drawZChart(canvasId, H) {
       ctx.closePath();
       // Color: green when IV7 > IV30 (spike = contrarian bullish), red when IV7 < IV30 (compression)
       const lastDiff = iv7data[idxs[idxs.length-1]].v - iv30data[idxs[idxs.length-1]].v;
-      ctx.fillStyle = lastDiff > 0 ? 'rgba(0,232,122,0.12)' : 'rgba(255,61,90,0.12)';
+      ctx.fillStyle = lastDiff > 0 ? 'rgba(0,232,122,0.25)' : 'rgba(255,61,90,0.22)';
       ctx.fill();
     }
   }
