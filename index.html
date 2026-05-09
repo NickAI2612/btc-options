@@ -317,6 +317,32 @@ canvas#fsChart{width:100%;height:100%;display:block}
   </div>
 
   <div class="sec" style="margin-top:8px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <div class="lbl" style="margin-bottom:0">25-Delta Vol Surface</div>
+      <button class="expand-btn" onclick="openFsGeneric('vol25')">⤢ ПОЛНЫЙ ЭКРАН</button>
+    </div>
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:5px;padding:10px 12px">
+      <!-- Term Structure Bar Chart -->
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px">
+        <div id="vs1d" class="card" style="padding:8px"></div>
+        <div id="vs7d" class="card" style="padding:8px"></div>
+        <div id="vs30d" class="card" style="padding:8px"></div>
+      </div>
+      <!-- Term Structure Curve Canvas -->
+      <canvas id="termCurve" height="90" style="width:100%;display:block"></canvas>
+      <div style="display:flex;justify-content:space-between;padding:2px 8px 0">
+        <span style="font-size:7.5px;color:var(--text3);font-family:'Space Mono',monospace">1D</span>
+        <span style="font-size:7.5px;color:var(--text3);font-family:'Space Mono',monospace">7D</span>
+        <span style="font-size:7.5px;color:var(--text3);font-family:'Space Mono',monospace">30D</span>
+      </div>
+      <!-- Risk Reversal Z-Score -->
+      <div style="margin-top:8px;padding:6px 10px;background:var(--bg3);border-radius:4px" id="rrInterpBox">
+        <div style="font-size:9px;color:var(--text2)">Загрузка...</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec" style="margin-top:8px">
     <div class="lbl">Метрики опционного рынка</div>
     <div class="m2" id="mGrid">—</div>
   </div>
@@ -435,6 +461,23 @@ function bsGamma(S, K, T, sig) {
   } catch(e) { return 0; }
 }
 
+function normCDF(x) {
+  // Approximation (Abramowitz & Stegun, max error 1.5e-7)
+  const a = [0.319381530,-0.356563782,1.781477937,-1.821255978,1.330274429];
+  const k = 1/(1+0.2316419*Math.abs(x));
+  let p = k*(a[0]+k*(a[1]+k*(a[2]+k*(a[3]+k*a[4]))));
+  p = 1 - (1/Math.sqrt(2*Math.PI))*Math.exp(-x*x*0.5)*p;
+  return x >= 0 ? p : 1-p;
+}
+
+function bsDelta(S, K, T, sig, isCall) {
+  if (T <= 0 || sig <= 0 || S <= 0 || K <= 0) return isCall ? 0.5 : -0.5;
+  try {
+    const d1 = (Math.log(S/K) + 0.5*sig*sig*T) / (sig*Math.sqrt(T));
+    return isCall ? normCDF(d1) : normCDF(d1) - 1;
+  } catch(e) { return 0; }
+}
+
 function parseInst(name) {
   const p = name.split('-');
   if (p.length < 4) return null;
@@ -462,6 +505,9 @@ function histSave() {
 function histPush() {
   const row = {
     ts: Date.now(), price: S.price,
+    rr7d:  S.vol25.t7d  ? S.vol25.t7d.rr  : 0,
+    rr30d: S.vol25.t30d ? S.vol25.t30d.rr : 0,
+    bf7d:  S.vol25.t7d  ? S.vol25.t7d.bf  : 0,
     pcr: S.pcr, ivSkew: S.ivSkew, dvol: S.dvol,
     termStr: S.termStr,
     mpDelta: S.maxPain > 0 ? (S.maxPain - S.price)/S.price*100 : 0,
@@ -733,6 +779,61 @@ function processAll() {
   // Now update monthly OI with real GEX values
   if(S.oiMonthly) S.oiMonthly = S.oiMonthly.map(o=>({...o,gex:gbs[o.strike]||0}));
 
+  // ── 25-Delta Vol Surface ────────────────────────────────────
+  // Tenors: ~1d, ~7d, ~30d — find closest expiries
+  const msPerDay = 86400000;
+  const tenor1d  = now + 1  * msPerDay;
+  const tenor7d  = now + 7  * msPerDay;
+  const tenor30d = now + 30 * msPerDay;
+
+  function closestExp(target) {
+    return expSet.reduce((best, t) => {
+      if(t <= now) return best;
+      return Math.abs(t - target) < Math.abs(best - target) ? t : best;
+    }, expSet.find(t=>t>now)||expSet[0]);
+  }
+
+  const exp1d  = closestExp(tenor1d);
+  const exp7d  = closestExp(tenor7d);
+  const exp30d = closestExp(tenor30d);
+
+  function get25dPair(expTime) {
+    const opts = parsed.filter(o => o.expiry.getTime() === expTime && o.iv > 0);
+    const T    = Math.max(0, (expTime - now) / (365 * msPerDay));
+    if(T < 1e-6 || opts.length < 2) return null;
+
+    let best25C = null, best25P = null;
+    let minDiffC = 99, minDiffP = 99;
+
+    for(const o of opts) {
+      const d = bsDelta(price, o.strike, T, o.iv/100, o.type==='C');
+      const absd = Math.abs(Math.abs(d) - 0.25);
+      if(o.type==='C' && absd < minDiffC) { minDiffC=absd; best25C=o; }
+      if(o.type==='P' && absd < minDiffP) { minDiffP=absd; best25P=o; }
+    }
+    if(!best25C || !best25P) return null;
+
+    const atm = opts.filter(o=>Math.abs(o.strike-price)<price*0.03&&o.iv>0);
+    const atmIV= atm.length ? atm.reduce((s,o)=>s+o.iv,0)/atm.length : (best25C.iv+best25P.iv)/2;
+
+    return {
+      expTime, T,
+      iv25C:   best25C.iv,
+      iv25P:   best25P.iv,
+      rr:      best25P.iv - best25C.iv,   // Risk Reversal (positive = put skew)
+      bf:      (best25P.iv + best25C.iv)/2 - atmIV,  // Butterfly (kurtosis)
+      atmIV,
+      strike25C: best25C.strike,
+      strike25P: best25P.strike,
+    };
+  }
+
+  S.vol25 = {
+    t1d:  get25dPair(exp1d),
+    t7d:  get25dPair(exp7d),
+    t30d: get25dPair(exp30d),
+  };
+
   // Gamma Flip
   const skeys=Object.keys(gbs).map(Number).sort((a,b)=>a-b);
   let cum=0, flip=0;
@@ -932,6 +1033,149 @@ function renderIVChart() {
   }
 }
 
+function renderVolSurface() {
+  const v = S.vol25;
+  if(!v) return;
+
+  // Helper: render one tenor card
+  function renderCard(elId, d, label, dayLabel) {
+    const el = document.getElementById(elId); if(!el) return;
+    if(!d) { el.innerHTML = '<div style="color:var(--text3);font-size:9px">'+label+'<br>нет данных</div>'; return; }
+    const rrCol = d.rr > 3 ? 'var(--bear)' : d.rr < -1 ? 'var(--bull)' : 'var(--text)';
+    const bfCol = d.bf > 2 ? 'var(--bear)' : 'var(--text2)';
+
+    // Z-scores from history
+    const rrKey = label==='7D'?'rr7d':'rr30d';
+    const rrVals = S.hist.map(h=>h[rrKey]||0).filter(v=>v!==0);
+    let rrZ = null;
+    if(rrVals.length >= 15) {
+      const m=rrVals.reduce((a,b)=>a+b,0)/rrVals.length;
+      const sd=Math.sqrt(rrVals.reduce((a,b)=>a+(b-m)**2,0)/rrVals.length);
+      rrZ = sd>1e-10 ? (d.rr-m)/sd : 0;
+    }
+    const rrZStr = rrZ!==null ? ' (z:'+(rrZ>=0?'+':'')+rrZ.toFixed(1)+'σ)' : '';
+
+    el.innerHTML =
+      '<div style="font-family:Space Mono,monospace;font-size:8px;color:var(--text3);margin-bottom:5px">'+dayLabel+'</div>'+
+      '<div style="font-size:8.5px;color:var(--text2);margin-bottom:2px">ATM IV</div>'+
+      '<div style="font-family:Space Mono,monospace;font-size:16px;font-weight:700;color:var(--text)">'+d.atmIV.toFixed(1)+'%</div>'+
+      '<div style="height:1px;background:var(--border);margin:5px 0"></div>'+
+      '<div style="display:flex;justify-content:space-between;margin-bottom:3px">'+
+        '<span style="font-size:8px;color:var(--text3)">25d RR</span>'+
+        '<span style="font-family:Space Mono,monospace;font-size:9px;font-weight:700;color:'+rrCol+'">'+
+          (d.rr>=0?'+':'')+d.rr.toFixed(1)+'%'+rrZStr+'</span>'+
+      '</div>'+
+      '<div style="display:flex;justify-content:space-between;margin-bottom:3px">'+
+        '<span style="font-size:8px;color:var(--text3)">25d BF</span>'+
+        '<span style="font-family:Space Mono,monospace;font-size:9px;color:'+bfCol+'">'+
+          (d.bf>=0?'+':'')+d.bf.toFixed(1)+'%</span>'+
+      '</div>'+
+      '<div style="display:flex;justify-content:space-between">'+
+        '<span style="font-size:7.5px;color:var(--text3)">P/C strikes</span>'+
+        '<span style="font-size:7.5px;color:var(--text3)">'+
+          '$'+d.strike25P.toLocaleString('en-US')+'/$'+d.strike25C.toLocaleString('en-US')+'</span>'+
+      '</div>';
+  }
+
+  renderCard('vs1d',  v.t1d,  '1D',  '1-DAY');
+  renderCard('vs7d',  v.t7d,  '7D',  '7-DAY');
+  renderCard('vs30d', v.t30d, '30D', '30-DAY');
+
+  // Term Structure Curve (ATM IV across tenors)
+  const cv = document.getElementById('termCurve'); if(!cv) return;
+  const ctx = cv.getContext('2d');
+  const W = cv.offsetWidth||700, H=90;
+  cv.width=W; cv.height=H;
+  ctx.clearRect(0,0,W,H);
+
+  const pts3 = [
+    {x:W*0.12, iv:v.t1d  ? v.t1d.atmIV  : null, rr:v.t1d  ? v.t1d.rr  : 0, label:'1D'},
+    {x:W*0.50, iv:v.t7d  ? v.t7d.atmIV  : null, rr:v.t7d  ? v.t7d.rr  : 0, label:'7D'},
+    {x:W*0.88, iv:v.t30d ? v.t30d.atmIV : null, rr:v.t30d ? v.t30d.rr : 0, label:'30D'},
+  ].filter(p=>p.iv!==null);
+
+  if(pts3.length < 2) {
+    ctx.fillStyle='rgba(122,130,154,0.4)'; ctx.font='9px Space Mono,monospace'; ctx.textAlign='center';
+    ctx.fillText('Загрузка данных...', W/2, H/2); return;
+  }
+
+  const ivMin = Math.min(...pts3.map(p=>p.iv)) - 3;
+  const ivMax = Math.max(...pts3.map(p=>p.iv)) + 3;
+  const ivY = iv => H-10 - ((iv-ivMin)/(ivMax-ivMin)) * (H-20);
+
+  // Grid
+  ctx.strokeStyle='rgba(255,255,255,0.06)'; ctx.lineWidth=0.5; ctx.setLineDash([2,3]);
+  for(let i=0;i<3;i++){const y=H-10-i*(H-20)/2;ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+  ctx.setLineDash([]);
+
+  // ATM IV curve (blue)
+  ctx.beginPath();
+  pts3.forEach((p,i)=>i===0?ctx.moveTo(p.x,ivY(p.iv)):ctx.lineTo(p.x,ivY(p.iv)));
+  ctx.strokeStyle='var(--accent)'; ctx.lineWidth=2; ctx.stroke();
+
+  // RR line (second y-axis concept — shown as colored bars above/below zero)
+  const rrAll = pts3.map(p=>p.rr);
+  const rrMax = Math.max(...rrAll.map(Math.abs), 2);
+  const rrY0 = H*0.55; // zero line for RR
+  const rrScale = (H*0.35) / rrMax;
+  pts3.forEach(p => {
+    const bh = p.rr * rrScale;
+    ctx.fillStyle = p.rr > 0 ? 'rgba(255,61,90,0.5)' : 'rgba(0,232,122,0.5)';
+    ctx.fillRect(p.x-12, bh>0?rrY0-bh:rrY0, 24, Math.abs(bh));
+  });
+
+  // Dots and labels for ATM IV
+  pts3.forEach(p => {
+    ctx.beginPath(); ctx.arc(p.x,ivY(p.iv),4,0,Math.PI*2);
+    ctx.fillStyle='var(--accent)'; ctx.fill();
+    ctx.fillStyle='rgba(0,212,255,0.9)'; ctx.font='bold 9px Space Mono,monospace'; ctx.textAlign='center';
+    ctx.fillText(p.iv.toFixed(1)+'%', p.x, ivY(p.iv)-7);
+    ctx.fillStyle='rgba(255,255,255,0.3)'; ctx.font='8px Space Mono,monospace';
+    ctx.fillText(p.label, p.x, H-1);
+  });
+
+  // Legend
+  ctx.fillStyle='rgba(0,212,255,0.7)'; ctx.fillRect(8,4,12,3);
+  ctx.fillStyle='rgba(255,255,255,0.4)'; ctx.font='8px Space Mono,monospace'; ctx.textAlign='left';
+  ctx.fillText('ATM IV', 24, 10);
+  ctx.fillStyle='rgba(255,61,90,0.6)'; ctx.fillRect(75,4,10,8);
+  ctx.fillStyle='rgba(255,255,255,0.4)'; ctx.fillText('RR+', 89, 10);
+  ctx.fillStyle='rgba(0,232,122,0.6)'; ctx.fillRect(110,4,10,8);
+  ctx.fillStyle='rgba(255,255,255,0.4)'; ctx.fillText('RR−', 124, 10);
+
+  // Interpretation
+  const rrBox = document.getElementById('rrInterpBox'); if(!rrBox) return;
+  const rr7  = v.t7d  ? v.t7d.rr  : null;
+  const rr30 = v.t30d ? v.t30d.rr : null;
+  const atm7  = v.t7d  ? v.t7d.atmIV  : null;
+  const atm30 = v.t30d ? v.t30d.atmIV : null;
+
+  let msg='', msgColor='var(--text2)';
+  if(rr7!==null && rr30!==null) {
+    const rrSpread = rr7 - rr30;
+    if(atm7!==null && atm30!==null && atm7 > atm30 + 3) {
+      msg='⚠ Term Structure ИНВЕРТИРОВАНА (краткосрочный страх выше). Острый риск-офф.';
+      msgColor='var(--bear)';
+    } else if(rr7 > 5 && rr30 > 3) {
+      msg='⚠ Puts дорогие на всех тенорах. Устойчивый bearish sentiment. Структурный страх.';
+      msgColor='var(--bear)';
+    } else if(rrSpread > 3) {
+      msg='★ Краткосрочный страх выше долгосрочного (7d RR >> 30d RR). Event spike = buy.';
+      msgColor='var(--bull)';
+    } else if(rr7 < 0 && rr30 < 0) {
+      msg='★ Calls дороже puts на всех тенорах. Bullish sentiment профи. Leading bullish.';
+      msgColor='var(--bull)';
+    } else if(rr7 < 0 && rr30 > 1) {
+      msg='★ Краткосрочно bullish, долгосрочно cautious. Возможный разворот вверх.';
+      msgColor='var(--bull)';
+    } else {
+      msg='Нейтральный режим. Нет явного перекоса в стоимости опционов.';
+      msgColor='var(--text2)';
+    }
+  } else { msg='Накопление данных...'; }
+  rrBox.innerHTML = '<div style="font-size:9px;color:'+msgColor+';font-family:DM Sans,sans-serif">'+msg+'</div>';
+}
+
 function renderAll() {
   try { renderHeader(); } catch(e){}
   try { renderComposite(); } catch(e){}
@@ -939,6 +1183,7 @@ function renderAll() {
   try { renderSparklineMini(); } catch(e){}
   try { renderIVChart(); } catch(e){}
   try { renderCompGrid(); } catch(e){}
+  try { renderVolSurface(); } catch(e){}
   try { renderMaxPain(); } catch(e){}
   try { renderOI(); } catch(e){}
   try { renderMetrics(); } catch(e){}
@@ -1707,6 +1952,12 @@ function openFsGeneric(mode) {
     if(title)title.textContent='IV7 vs IV30 — СПРЕД ВОЛАТИЛЬНОСТИ';
     if(legend)legend.innerHTML=`<span style="font-size:9px;color:rgba(100,190,255,0.9);font-family:'Space Mono',monospace">— IV7 (7д)</span>
       <span style="font-size:9px;color:rgba(60,130,255,0.9);font-family:'Space Mono',monospace">--- IV30 (30д)</span>`;
+  } else if(mode==='vol25'){
+    if(title)title.textContent='25-DELTA VOL SURFACE — TERM STRUCTURE';
+    if(legend)legend.innerHTML=
+      '<span style="font-size:9px;color:var(--accent);font-family:Space Mono,monospace">— ATM IV</span>'+
+      '<span style="font-size:9px;color:rgba(255,61,90,0.8);font-family:Space Mono,monospace">■ RR+ (Puts дороже)</span>'+
+      '<span style="font-size:9px;color:rgba(0,232,122,0.8);font-family:Space Mono,monospace">■ RR- (Calls дороже)</span>';
   } else if(mode==='comp'){
     if(title)title.textContent='ВСЕ КОМПОНЕНТЫ — Z-SCORE';
     if(legend)legend.innerHTML=COMP_DEFS.map(d=>`<span style="font-size:9px;color:${d.color};font-family:'Space Mono',monospace">● ${d.label}</span>`).join('');
@@ -1771,6 +2022,38 @@ function drawFsGenChart(cv){
     const idx = parseInt(_fsGenMode.split('_')[1]);
     const def = COMP_DEFS[idx];
     if(def) drawFsSingleComp(ctx, W, H, def);
+  } else if(_fsGenMode==='vol25'){
+    // Full-screen Vol Surface: term structure + RR across expiries
+    ctx.clearRect(0,0,W,H);
+    const v=S.vol25; if(!v){ctx.fillStyle='rgba(122,130,154,0.5)';ctx.font='14px Space Mono,monospace';ctx.textAlign='center';ctx.fillText('Загрузка...',W/2,H/2);return;}
+    const tenors=[{d:v.t1d,lbl:'1D'},{d:v.t7d,lbl:'7D'},{d:v.t30d,lbl:'30D'}].filter(t=>t.d);
+    if(tenors.length<2){ctx.fillStyle='rgba(122,130,154,0.5)';ctx.font='14px Space Mono,monospace';ctx.textAlign='center';ctx.fillText('Недостаточно данных',W/2,H/2);return;}
+    const xs=[W*0.15,W*0.5,W*0.85];
+    // ATM IV line
+    const atmVals=tenors.map(t=>t.d.atmIV);
+    const ivMn=Math.min(...atmVals)-5, ivMx=Math.max(...atmVals)+5;
+    const ivY2=iv=>H*0.7-((iv-ivMn)/(ivMx-ivMn))*(H*0.55);
+    // Grid
+    ctx.strokeStyle='rgba(255,255,255,0.08)';ctx.lineWidth=0.5;ctx.setLineDash([4,5]);
+    for(let i=0;i<=4;i++){const iv=ivMn+i*(ivMx-ivMn)/4;const y=ivY2(iv);ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();ctx.fillStyle='rgba(255,255,255,0.3)';ctx.font='11px Space Mono,monospace';ctx.textAlign='left';ctx.fillText(iv.toFixed(0)+'%',4,y-3);}
+    ctx.setLineDash([]);
+    // ATM IV area fill
+    ctx.beginPath();ctx.moveTo(xs[0],ivY2(tenors[0].d.atmIV));
+    tenors.forEach((t,i)=>ctx.lineTo(xs[i],ivY2(t.d.atmIV)));
+    ctx.lineTo(xs[tenors.length-1],H*0.7);ctx.lineTo(xs[0],H*0.7);ctx.closePath();
+    ctx.fillStyle='rgba(0,212,255,0.08)';ctx.fill();
+    ctx.beginPath();tenors.forEach((t,i)=>i===0?ctx.moveTo(xs[i],ivY2(t.d.atmIV)):ctx.lineTo(xs[i],ivY2(t.d.atmIV)));
+    ctx.strokeStyle='var(--accent)';ctx.lineWidth=3;ctx.stroke();
+    tenors.forEach((t,i)=>{ctx.beginPath();ctx.arc(xs[i],ivY2(t.d.atmIV),7,0,Math.PI*2);ctx.fillStyle='var(--accent)';ctx.fill();ctx.fillStyle='var(--bg)';ctx.font='bold 10px Space Mono,monospace';ctx.textAlign='center';ctx.fillText(t.d.atmIV.toFixed(0),xs[i],ivY2(t.d.atmIV)+4);});
+    // RR bars
+    const rrAll=tenors.map(t=>Math.abs(t.d.rr));const rrMx=Math.max(...rrAll,3);
+    const rrBase=H*0.88,rrSc=(H*0.15)/rrMx;
+    tenors.forEach((t,i)=>{const bh=Math.abs(t.d.rr)*rrSc;ctx.fillStyle=t.d.rr>0?'rgba(255,61,90,0.7)':'rgba(0,232,122,0.7)';ctx.fillRect(xs[i]-30,t.d.rr>0?rrBase-bh:rrBase,60,bh);ctx.fillStyle='rgba(255,255,255,0.6)';ctx.font='bold 11px Space Mono,monospace';ctx.textAlign='center';ctx.fillText((t.d.rr>=0?'+':'')+t.d.rr.toFixed(1)+'%',xs[i],t.d.rr>0?rrBase-bh-4:rrBase+bh+12);});
+    // Labels
+    tenors.forEach((t,i)=>{ctx.fillStyle='rgba(255,255,255,0.5)';ctx.font='13px Space Mono,monospace';ctx.textAlign='center';ctx.fillText(t.lbl,xs[i],H-8);});
+    // Title labels
+    ctx.fillStyle='rgba(0,212,255,0.8)';ctx.font='bold 13px Space Mono,monospace';ctx.textAlign='left';ctx.fillText('ATM IMPLIED VOLATILITY + 25-DELTA RISK REVERSAL',16,22);
+    ctx.fillStyle='rgba(255,255,255,0.35)';ctx.font='11px Space Mono,monospace';ctx.fillText('RR = 25d Put IV - 25d Call IV  |  RR+ = Put дороже (fear)  |  RR- = Call дороже (bullish)',16,40);
   } else if(_fsGenMode==='comp'){
     // All components in one big chart
     ctx.clearRect(0,0,W,H);
