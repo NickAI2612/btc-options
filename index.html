@@ -287,7 +287,8 @@ canvas#fsChart{width:100%;height:100%;display:block}
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
         <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
           <span style="font-size:8.5px;color:#ff9500;font-family:'Space Mono',monospace">● PCR</span>
-          <span style="font-size:8.5px;color:#2d7ef7;font-family:'Space Mono',monospace">● DVOL</span>
+          <span style="font-size:8.5px;color:rgba(100,190,255,0.9);font-family:'Space Mono',monospace">● IV7</span>
+          <span style="font-size:8.5px;color:rgba(30,90,220,0.9);font-family:'Space Mono',monospace">● IV30</span>
           <span style="font-size:8.5px;color:#ab47bc;font-family:'Space Mono',monospace">● IV Skew</span>
           <span style="font-size:8.5px;color:#00e87a;font-family:'Space Mono',monospace;font-weight:700">● Composite</span>
         </div>
@@ -757,7 +758,13 @@ function computeComposite() {
     sc.ivSkew = ds.p7!==null ? (ds.p7<20?2:ds.p7<35?1:ds.p7>80?-2:ds.p7>65?-1:0) : (S.ivSkew<-1?2:S.ivSkew<0?1:S.ivSkew>3?-2:S.ivSkew>1?-1:0);
     sc._ivs=ds;
     const dd=dualZ('dvol',S.dvol);
-    sc.dvol = dd.z7!==null ? z2sc(-dd.z7) : (S.dvol<45?1:S.dvol>70?-2:S.dvol>60?-1:0);
+    // iv7 = fast signal (7-day z-score of DVOL, inverted: high DVOL = bearish)
+    sc.iv7  = dd.z7 !==null ? z2sc(-dd.z7)  : (S.dvol<45?1:S.dvol>70?-2:0);
+    // iv30 = slow regime signal (30-day z-score of DVOL, inverted)
+    sc.iv30 = dd.z30!==null ? z2sc(-dd.z30) : 0;
+    // spread: iv7 > iv30 = spike (contrarian bullish); iv7 < iv30 = compression (watch for breakout)
+    const ivSpreadRaw = (dd.z7!==null&&dd.z30!==null) ? -(dd.z7-dd.z30) : 0;
+    sc.ivSpread = ivSpreadRaw>1?1 : ivSpreadRaw<-1?-1 : 0;
     sc._dvol=dd;
     const dt=dualZ('termStr',S.termStr);
     sc.termStr = dt.z7!==null ? z2sc(-dt.z7) : (S.termStr>5?-2:S.termStr>2?-1:S.termStr<-5?2:S.termStr<-2?1:0);
@@ -771,14 +778,15 @@ function computeComposite() {
   } else {
     sc.pcr=S.pcr>1.3?2:S.pcr>1.1?1:S.pcr<0.65?-2:S.pcr<0.8?-1:0;
     sc.ivSkew=S.ivSkew<-1?2:S.ivSkew<0?1:S.ivSkew>3?-2:S.ivSkew>1?-1:0;
-    sc.dvol=S.dvol<45?1:S.dvol>70?-2:S.dvol>60?-1:0;
+    sc.iv7 =S.dvol<45?1:S.dvol>70?-2:S.dvol>60?-1:0;
+    sc.iv30=0; sc.ivSpread=0;
     sc.termStr=S.termStr>5?-2:S.termStr>2?-1:S.termStr<-5?2:S.termStr<-2?1:0;
     sc.maxPain=S.maxPain>0?((S.maxPain-S.price)/S.price*100>1?1:-1):0;
     sc.gex=S.gexTotal>0?1:0;
     sc.funding=S.fundingRate>0.1?-1:0;
   }
   S.scores=sc;
-  const W={pcr:2,ivSkew:2,dvol:2,termStr:1.5,maxPain:1.5,gex:0.5,funding:0.5};
+  const W={pcr:2,ivSkew:2,iv7:1.5,iv30:1.0,ivSpread:0.5,termStr:1.5,maxPain:1.5,gex:0.5,funding:0.5};
   let tot=0,wT=0;
   for (const[k,v] of Object.entries(sc)) {
     if(k[0]==='_') continue;
@@ -844,7 +852,7 @@ function zTag(z,l){
 
 function renderGauges(){
   const w=document.getElementById('gauges');if(!w)return;
-  const names={pcr:'PCR',ivSkew:'IV Skew',dvol:'DVOL',termStr:'Term',maxPain:'Max Pain',gex:'GEX',funding:'Funding'};
+  const names={pcr:'PCR',ivSkew:'IV Skew',iv7:'IV7 (быстрый)',iv30:'IV30 (режим)',ivSpread:'IV Spread',termStr:'Term',maxPain:'Max Pain',gex:'GEX',funding:'Funding'};
   const inv={pcr:true,ivSkew:true,termStr:true,funding:true};
   let h='';
   for(const[k,sc] of Object.entries(S.scores)){
@@ -1379,25 +1387,68 @@ function drawZChart(canvasId, H) {
   const pcrV=pts.map(d=>d.pcr), dvolV=pts.map(d=>d.dvol), skewV=pts.map(d=>d.ivSkew);
   const WIN = Math.min(pts.length, 480);
 
+  const WIN7  = Math.min(pts.length, 2016);  // 7 days @ 3min
+  const WIN30 = Math.min(pts.length, 10080); // 30 days @ 3min
+
+  const iv7data  = pts.map((d,i)=>{const z=rolZ(dvolV.slice(0,i+1),d.dvol,Math.min(i+1,WIN7));  return{ts:d.ts,v:z!==null?-z:null};});
+  const iv30data = pts.map((d,i)=>{const z=rolZ(dvolV.slice(0,i+1),d.dvol,Math.min(i+1,WIN30)); return{ts:d.ts,v:z!==null?-z:null};});
+
   const series = [
-    {color:'rgba(255,149,0,0.8)', lw:1.3,
-     data:pts.map((d,i)=>{const z=rolZ(pcrV.slice(0,i+1),d.pcr,WIN);return{ts:d.ts,v:z!==null?-z:null};})},
-    {color:'rgba(45,126,247,0.8)', lw:1.3,
-     data:pts.map((d,i)=>{const z=rolZ(dvolV.slice(0,i+1),d.dvol,WIN);return{ts:d.ts,v:z!==null?-z:null};})},
-    {color:'rgba(171,71,188,0.8)', lw:1.3,
-     data:pts.map((d,i)=>{const z=rolZ(skewV.slice(0,i+1),d.ivSkew,WIN);return{ts:d.ts,v:z!==null?-z:null};})},
+    {color:'rgba(255,149,0,0.8)',  lw:1.3, data:pts.map((d,i)=>{const z=rolZ(pcrV.slice(0,i+1),d.pcr,WIN);return{ts:d.ts,v:z!==null?-z:null};})},
+    {color:'rgba(171,71,188,0.8)', lw:1.3, data:pts.map((d,i)=>{const z=rolZ(skewV.slice(0,i+1),d.ivSkew,WIN);return{ts:d.ts,v:z!==null?-z:null};})},
   ];
 
+  // Draw IV spread fill BEFORE lines (background)
+  const iv7valid  = iv7data.filter(p=>p.v!==null);
+  const iv30valid = iv30data.filter(p=>p.v!==null);
+  if(iv7valid.length>=2 && iv30valid.length>=2) {
+    // Fill between IV7 and IV30
+    const allPts = pts.filter((_,i)=>iv7data[i].v!==null && iv30data[i].v!==null);
+    if(allPts.length>=2) {
+      const idxs = pts.reduce((acc,_,i)=>{if(iv7data[i].v!==null&&iv30data[i].v!==null)acc.push(i);return acc;},[]);
+      ctx.beginPath();
+      ctx.moveTo(tX(pts[idxs[0]].ts), tY(iv7data[idxs[0]].v));
+      idxs.forEach(i=>ctx.lineTo(tX(pts[i].ts), tY(iv7data[i].v)));
+      idxs.slice().reverse().forEach(i=>ctx.lineTo(tX(pts[i].ts), tY(iv30data[i].v)));
+      ctx.closePath();
+      // Color: green when IV7 > IV30 (spike = contrarian bullish), red when IV7 < IV30 (compression)
+      const lastDiff = iv7data[idxs[idxs.length-1]].v - iv30data[idxs[idxs.length-1]].v;
+      ctx.fillStyle = lastDiff > 0 ? 'rgba(0,232,122,0.12)' : 'rgba(255,61,90,0.12)';
+      ctx.fill();
+    }
+  }
+
   const compD = pts.map((d,i)=>{
-    const pz=rolZ(pcrV.slice(0,i+1),d.pcr,WIN);
-    const dz=rolZ(dvolV.slice(0,i+1),d.dvol,WIN);
-    const sz=rolZ(skewV.slice(0,i+1),d.ivSkew,WIN);
+    const pz  = rolZ(pcrV.slice(0,i+1),d.pcr,WIN);
+    const sz  = rolZ(skewV.slice(0,i+1),d.ivSkew,WIN);
+    const iz7 = iv7data[i].v;   // already inverted
+    const iz30= iv30data[i].v;  // already inverted
     let s=0,c=0;
-    if(pz!==null){s-=pz*0.35;c++;}
-    if(dz!==null){s-=dz*0.35;c++;}
-    if(sz!==null){s-=sz*0.30;c++;}
+    if(pz!==null){s-=pz*0.30;c++;}
+    if(sz!==null){s-=sz*0.25;c++;}
+    if(iz7!==null){s+=iz7*0.25;c++;}
+    if(iz30!==null){s+=iz30*0.20;c++;}
+    // spread bonus: IV7 > IV30 = spike = contrarian bullish
+    if(iz7!==null&&iz30!==null){s+=(iz7-iz30)*0.10;}
     return{ts:d.ts,v:c>0?Math.max(-3,Math.min(3,s)):null};
   });
+
+  // Draw IV7 (light blue, fast) and IV30 (dark blue, slow)
+  const ivPairs = [
+    {data:iv7data,  color:'rgba(100,190,255,0.85)', lw:1.2, label:'IV7'},
+    {data:iv30data, color:'rgba(30,90,220,0.85)',   lw:1.4, label:'IV30'},
+  ];
+  for(const sr of ivPairs) {
+    const vld=sr.data.filter(p=>p.v!==null);
+    if(vld.length<2)continue;
+    ctx.beginPath();let st=false;
+    for(const pt of sr.data){
+      if(pt.v===null){st=false;continue;}
+      const x=tX(pt.ts),y=tY(pt.v);
+      if(!st){ctx.moveTo(x,y);st=true;}else ctx.lineTo(x,y);
+    }
+    ctx.strokeStyle=sr.color;ctx.lineWidth=sr.lw;ctx.stroke();
+  }
 
   // Draw component lines
   for (const sr of series) {
@@ -1492,7 +1543,8 @@ setInterval(morning, 60000);
     <div class="fs-title">Z-SCORE — ИСТОРИЧЕСКИЕ ЛИНИИ</div>
     <div class="fs-legend">
       <span style="font-size:9px;color:#ff9500;font-family:'Space Mono',monospace">● PCR</span>
-      <span style="font-size:9px;color:#2d7ef7;font-family:'Space Mono',monospace">● DVOL</span>
+      <span style="font-size:9px;color:rgba(100,190,255,0.9);font-family:'Space Mono',monospace">● IV7</span>
+      <span style="font-size:9px;color:rgba(30,90,220,0.9);font-family:'Space Mono',monospace">● IV30</span>
       <span style="font-size:9px;color:#ab47bc;font-family:'Space Mono',monospace">● IV Skew</span>
       <span style="font-size:9px;color:#00e87a;font-family:'Space Mono',monospace;font-weight:700">● Composite</span>
       <span style="font-size:9px;color:var(--text3);font-family:'Space Mono',monospace" id="fspts"></span>
