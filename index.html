@@ -588,11 +588,25 @@ function processAll() {
   if (!parsed.length) return;
 
   const expSet = [...new Set(parsed.map(o=>o.expiry.getTime()))].sort();
-  const nextExp = expSet.find(t=>t>now) || expSet[0];
-  const farExp  = expSet.length>1 ? expSet[expSet.length-1] : null;
+
+  // Prefer Friday expiries for Max Pain (weekly = most meaningful)
+  // Friday = day 5 in UTC
+  const fridayExps = expSet.filter(t => new Date(t).getUTCDay() === 5 && t > now);
+  const nextFriday = fridayExps.length > 0 ? fridayExps[0] : null;
+
+  // Next expiry for OI levels (any, nearest)
+  const nextAny = expSet.find(t=>t>now) || expSet[0];
+
+  // Use Friday for Max Pain, nearest for OI display
+  const nextExp  = nextFriday || nextAny;  // Max Pain uses Friday
+  const nextExpOI = nextAny;               // OI levels use nearest
+  const farExp   = expSet.length>1 ? expSet[expSet.length-1] : null;
   S.maxPainExp = new Date(nextExp);
 
+  // Max Pain calculation uses Friday expiry
   const nOpts = parsed.filter(o=>o.expiry.getTime()===nextExp);
+  // OI display uses nearest expiry (more relevant for levels)
+  const nOptsOI = parsed.filter(o=>o.expiry.getTime()===nextExpOI);
   const strikes = [...new Set(nOpts.map(o=>o.strike))].sort((a,b)=>a-b);
 
   // Max Pain
@@ -651,8 +665,10 @@ function processAll() {
   S.gammaFlip = flip;
 
   // OI Levels
-  const cW=nOpts.filter(o=>o.type==='C'&&o.strike>price).sort((a,b)=>b.oi-a.oi).slice(0,5);
-  const pW=nOpts.filter(o=>o.type==='P'&&o.strike<price).sort((a,b)=>b.oi-a.oi).slice(0,5);
+  // Use nearest expiry for OI wall display (more actionable)
+  const oiSrc = nOptsOI.length > 0 ? nOptsOI : nOpts;
+  const cW=oiSrc.filter(o=>o.type==='C'&&o.strike>price).sort((a,b)=>b.oi-a.oi).slice(0,5);
+  const pW=oiSrc.filter(o=>o.type==='P'&&o.strike<price).sort((a,b)=>b.oi-a.oi).slice(0,5);
   const mx=Math.max(...cW.map(o=>o.oi),...pW.map(o=>o.oi),1);
   S.oiLevels=[
     ...cW.map(o=>({strike:o.strike,type:'CALL',oi:o.oi,pct:o.oi/mx,gex:gbs[o.strike]||0})),
@@ -954,7 +970,9 @@ function renderMaxPain(){
   const de=document.getElementById('mpD');
   if(de){de.textContent=(d>=0?'+':'')+d.toFixed(1)+'%';de.className='mp-delta '+(d>=0?'pos':'neg');}
   if(S.maxPainExp){
-    txt('mpE',S.maxPainExp.toLocaleDateString('ru-RU',{day:'2-digit',month:'short',year:'numeric'})+' 08:00 UTC');
+    const days=['Вс','Пн','Вт','Ср','Чт','Пт','Сб'];
+    const dayName=days[S.maxPainExp.getUTCDay()];
+    txt('mpE',dayName+' '+S.maxPainExp.toLocaleDateString('ru-RU',{day:'2-digit',month:'short',year:'numeric'})+' 08:00 UTC');
     const now=Date.now(),left=S.maxPainExp.getTime()-now;
     const total=S.maxPainExp.getTime()-(now-7*86400*1000);
     sty('epF','width',Math.max(0,Math.min(100,(1-left/total)*100))+'%');
