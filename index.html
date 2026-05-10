@@ -384,9 +384,18 @@ canvas#fsChart{width:100%;height:100%;display:block}
     <div class="lbl">Настройки алертов</div>
     <div class="st-row"><div class="st-nm">Утренний дайджест 09:00 UTC</div><input type="checkbox" id="alM2" checked></div>
     <div class="st-row"><div class="st-nm">Composite signal change</div><input type="checkbox" id="alS2" checked></div>
+    <div class="st-row"><div class="st-nm">Composite пересёк 0</div><input type="checkbox" id="alC02" checked></div>
     <div class="st-row"><div class="st-nm">Max Pain пересечение</div><input type="checkbox" id="alMP2" checked></div>
+    <div class="st-row"><div class="st-nm">Max Pain Confluence W+M</div><input type="checkbox" id="alMPC2" checked></div>
+    <div class="st-row"><div class="st-nm">Обратный отсчёт экспирации</div><input type="checkbox" id="alExp2" checked></div>
     <div class="st-row"><div class="st-nm">Z-score ±2σ экстремум</div><input type="checkbox" id="alZ2" checked></div>
-    <div class="st-row"><div class="st-nm">GEX режим изменился</div><input type="checkbox" id="alG2" checked></div>
+    <div class="st-row"><div class="st-nm">GEX режим / Gamma Flip</div><input type="checkbox" id="alG2" checked></div>
+    <div class="st-row"><div class="st-nm">IV7 Spike (contrarian)</div><input type="checkbox" id="alIV2" checked></div>
+    <div class="st-row"><div class="st-nm">IV Compression</div><input type="checkbox" id="alIVC2" checked></div>
+    <div class="st-row"><div class="st-nm">PCR Capitulation / Euphoria</div><input type="checkbox" id="alPCR2" checked></div>
+    <div class="st-row"><div class="st-nm">25d RR Spike</div><input type="checkbox" id="alRR2" checked></div>
+    <div class="st-row"><div class="st-nm">Term Structure инверсия</div><input type="checkbox" id="alTS2" checked></div>
+    <div class="st-row"><div class="st-nm">Funding расхождение бирж</div><input type="checkbox" id="alFD2" checked></div>
   </div>
   <div class="sec" style="margin-top:8px">
     <div class="lbl">История z-score</div>
@@ -418,7 +427,7 @@ let S = {
   maxPain:0, maxPainExp:null, maxPainMonthly:0, maxPainMonthlyExp:null, oiMonthly:[],
   pcr:0, ivSkew:0, dvol:0, termStr:0,
   gexTotal:0, gexByStr:{}, gammaFlip:0,
-  fundingRate:0, hv30:0,
+  fundingRate:0, fundingRates:{}, fundingMax:0, fundingMin:0, fundingSpread:0, hv30:0,
   oiLevels:[],
   composite:0, scores:{},
   alerts:[], tg:{minScore:5},
@@ -628,11 +637,45 @@ async function loadData() {
       S.dvol = ivs.length ? ivs.reduce((a,b)=>a+b,0)/ivs.length : 60;
     }
 
-    // 4. Funding rate
+    // 4. Aggregated Funding Rate: Binance + Bybit + OKX + Hyperliquid
+    const fundRates = {};
     try {
       const fr = await api(BINANCE + 'premiumIndex?symbol=BTCUSDT');
-      S.fundingRate = parseFloat((fr||{}).lastFundingRate||0)*100;
-    } catch(e) { S.fundingRate = 0; }
+      fundRates.binance = parseFloat((fr||{}).lastFundingRate||0)*100;
+    } catch(e) { fundRates.binance = null; }
+    try {
+      const by = await api('https://api.bybit.com/v5/market/tickers?category=linear&symbol=BTCUSDT');
+      const byItem = ((by||{}).result||{}).list?.[0];
+      fundRates.bybit = byItem ? parseFloat(byItem.fundingRate||0)*100 : null;
+    } catch(e) { fundRates.bybit = null; }
+    try {
+      const ok = await api('https://www.okx.com/api/v5/public/funding-rate?instId=BTC-USDT-SWAP');
+      const okItem = ((ok||{}).data||[])[0];
+      fundRates.okx = okItem ? parseFloat(okItem.fundingRate||0)*100 : null;
+    } catch(e) { fundRates.okx = null; }
+    try {
+      const hl = await api('https://api.hyperliquid.xyz/info');
+      // HL uses POST — will try via proxy
+      fundRates.hyperliquid = null; // fallback: fetch separately below
+    } catch(e) { fundRates.hyperliquid = null; }
+    // Try Hyperliquid via POST
+    try {
+      const hlRes = await fetch('https://api.hyperliquid.xyz/info', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({type:'metaAndAssetCtxs'})
+      });
+      if(hlRes.ok){
+        const hlData = await hlRes.json();
+        const btcCtx = (hlData[1]||[]).find((_,i)=>(hlData[0]?.universe||[])[i]?.name==='BTC');
+        if(btcCtx) fundRates.hyperliquid = parseFloat(btcCtx.funding||0)*100;
+      }
+    } catch(e) {}
+    S.fundingRates = fundRates;
+    const validRates = Object.values(fundRates).filter(v=>v!==null);
+    S.fundingRate = validRates.length ? validRates.reduce((a,b)=>a+b,0)/validRates.length : 0;
+    S.fundingMax   = validRates.length ? Math.max(...validRates) : 0;
+    S.fundingMin   = validRates.length ? Math.min(...validRates) : 0;
+    S.fundingSpread = S.fundingMax - S.fundingMin;
 
     // 5. Process
     if (S.opts.length > 0) processAll();
@@ -1634,19 +1677,149 @@ function addAlert(msg,dir){
   if(!S.alerts.length){el.innerHTML='<div style="color:var(--text3);font-size:10px">Алертов пока нет</div>';return;}
   el.innerHTML=S.alerts.map(a=>`<div class="al-item ${a.dir}"><div class="al-tm">${a.time}</div><div class="al-ms">${a.msg}</div></div>`).join('');
 }
+// ─── ALERT DEDUP ──────────────────────────────────────────────────────────
+const _alertSent = {};
+function alertOnce(key, cooldownMin, fn) {
+  const now = Date.now();
+  if (_alertSent[key] && now - _alertSent[key] < cooldownMin * 60000) return;
+  _alertSent[key] = now;
+  fn();
+}
+
 function checkAlerts(){
-  const v=S.composite,mp=S.maxPain,p=S.price;
+  const v=S.composite, mp=S.maxPain, p=S.price;
+  const dd=S.scores['_dvol'];
+  const dp=S.scores['_pcr'];
+  const iv7z  = dd&&dd.z7 !==null ? -dd.z7  : null;
+  const iv30z = dd&&dd.z30!==null ? -dd.z30 : null;
+  const pcrZ  = dp&&dp.z7 !==null ? -dp.z7  : null;
+  const zRR7  = vs25Z('rr7d');
+  const zRR1  = vs25Z('rr1d');
+  const min   = S.tg.minScore||5;
+  const btcStr= '$'+Math.round(p).toLocaleString('en-US');
+  const compStr=(v>=0?'+':'')+v+'/10';
+
+  // 1. Composite direction
   const dir=v>3?'bull':v<-3?'bear':'neut';
   if(dir!==S.lastSigDir&&S.lastSigDir!==''){
-    const msg=`🔔 <b>BTC OPTIONS SIGNAL: ${dir==='bull'?'BULLISH':dir==='bear'?'BEARISH':'НЕЙТРАЛЬНЫЙ'}</b>\nComposite: <b>${v>=0?'+':''}${v}/10</b>\nBTC: $${Math.round(p).toLocaleString('en-US')}\nMax Pain: $${mp.toLocaleString('en-US')}\nPCR: ${S.pcr.toFixed(2)} | DVOL: ${S.dvol.toFixed(0)}`;
-    addAlert(`Composite → ${dir.toUpperCase()} (${v>=0?'+':''}${v})`,dir);
-    if(Math.abs(v)>=(S.tg.minScore||5))tgSend(msg);
+    const emoji=dir==='bull'?'🟢':dir==='bear'?'🔴':'⚪';
+    const lbl=dir==='bull'?'BULLISH':dir==='bear'?'BEARISH':'NEUTRAL';
+    addAlert('Composite '+lbl+' ('+compStr+')',dir);
+    if(Math.abs(v)>=min) tgSend(emoji+' <b>BTC OPTIONS: '+lbl+'</b>\nComposite: <b>'+compStr+'</b>\nBTC: '+btcStr+' | Max Pain: $'+mp.toLocaleString('en-US')+'\nPCR: '+S.pcr.toFixed(2)+' | DVOL: '+S.dvol.toFixed(0)+' | Funding: '+(S.fundingRate>=0?'+':'')+S.fundingRate.toFixed(4)+'%');
   }
   S.lastSigDir=dir;
-  if(mp>0&&Math.abs((mp-p)/p*100)<0.5)addAlert(`Цена у Max Pain $${mp.toLocaleString('en-US')}`,'neut');
+
+  // 2. Composite crosses 0
+  if(S._lastComp!==undefined){
+    if(S._lastComp<=0&&v>0) alertOnce('comp0up',60,()=>{addAlert('Composite пересёк 0 ВВЕРХ','bull');tgSend('📈 <b>Composite пересёк 0 ВВЕРХ</b>\nBTC: '+btcStr+' | Composite: '+compStr);});
+    if(S._lastComp>=0&&v<0) alertOnce('comp0dn',60,()=>{addAlert('Composite пересёк 0 ВНИЗ','bear');tgSend('📉 <b>Composite пересёк 0 ВНИЗ</b>\nBTC: '+btcStr+' | Composite: '+compStr);});
+  }
+  S._lastComp=v;
+
+  // 3. Max Pain proximity
+  if(mp>0&&Math.abs((mp-p)/p*100)<0.5) alertOnce('maxpain',120,()=>addAlert('Цена у Max Pain $'+mp.toLocaleString('en-US'),'neut'));
+
+  // 4. GEX режим
   const gm=S.gexTotal>0?'pos':'neg';
-  if(gm!==S.lastGexMode&&S.lastGexMode!=='')addAlert(`GEX режим: ${gm==='pos'?'позитивный':'негативный'}`,'neut');
+  if(gm!==S.lastGexMode&&S.lastGexMode!==''){
+    addAlert('GEX режим: '+(gm==='pos'?'GEX+ стабильный':'GEX- волатильный!'),'neut');
+    tgSend('⚡ <b>GEX РЕЖИМ ИЗМЕНИЛСЯ</b>\n'+(gm==='pos'?'GEX+ стабильный':'GEX- ВОЛАТИЛЬНЫЙ')+'\nGamma Flip: $'+S.gammaFlip.toLocaleString('en-US')+'\nBTC: '+btcStr);
+  }
   S.lastGexMode=gm;
+
+  // 5. Gamma Flip пробой
+  if(S.gammaFlip>0&&S._lastAboveFlip!==undefined){
+    const aboveNow=p>S.gammaFlip;
+    if(S._lastAboveFlip&&!aboveNow) alertOnce('gflipdn',90,()=>{addAlert('Gamma Flip ПРОБОЙ ВНИЗ $'+S.gammaFlip.toLocaleString('en-US'),'bear');tgSend('⚡ <b>GAMMA FLIP ПРОБОЙ ВНИЗ</b>\nВолатильный режим!\nFlip: $'+S.gammaFlip.toLocaleString('en-US')+' | BTC: '+btcStr);});
+    if(!S._lastAboveFlip&&aboveNow) alertOnce('gflipup',90,()=>{addAlert('Gamma Flip восстановлен выше $'+S.gammaFlip.toLocaleString('en-US'),'bull');tgSend('✅ <b>GAMMA FLIP ВЫШЕ</b>\nСтабильный режим\nFlip: $'+S.gammaFlip.toLocaleString('en-US')+' | BTC: '+btcStr);});
+  }
+  S._lastAboveFlip=p>S.gammaFlip;
+
+  // 6. IV7 Spike
+  if(iv7z!==null&&iv30z!==null&&iv7z>1.5&&iv30z<0.5) alertOnce('iv7spike',120,()=>{
+    addAlert('IV7 Spike +'+iv7z.toFixed(1)+'σ — contrarian BULLISH','bull');
+    tgSend('⭐ <b>IV7 SPIKE — CONTRARIAN BULLISH</b>\nIV7: +'+iv7z.toFixed(1)+'σ | IV30: '+(iv30z>=0?'+':'')+iv30z.toFixed(1)+'σ\nKраткосрочная паника на спокойном фоне.\nBTC: '+btcStr+' | DVOL: '+S.dvol.toFixed(0)+'\n<i>Лучший contrarian setup.</i>');
+  });
+
+  // 7. IV Compression
+  if(iv7z!==null&&iv30z!==null&&iv7z<-1&&iv30z<-1) alertOnce('ivcomp',180,()=>{
+    addAlert('IV Compression — жди взрывное движение','neut');
+    tgSend('⚡ <b>IV COMPRESSION</b>\nIV7: '+iv7z.toFixed(1)+'σ | IV30: '+iv30z.toFixed(1)+'σ\nObе линии ниже нормы. Breakout близко.\nBTC: '+btcStr+'\n<i>Направление определит Composite.</i>');
+  });
+
+  // 8. PCR Capitulation
+  if(pcrZ!==null&&pcrZ>2) alertOnce('pcrcap',180,()=>{
+    addAlert('PCR Capitulation z=+'+pcrZ.toFixed(1)+'σ — все купили путы','bull');
+    tgSend('🔥 <b>PCR CAPITULATION</b>\nPCR: '+S.pcr.toFixed(2)+' (z=+'+pcrZ.toFixed(1)+'σ)\nВсе купили путы — contrarian BULLISH.\nBTC: '+btcStr+'\n<i>Жди IV7 разворот + EVB.</i>');
+  });
+
+  // 9. PCR Euphoria
+  if(pcrZ!==null&&pcrZ<-2) alertOnce('pcreuph',180,()=>{
+    addAlert('PCR Euphoria z='+pcrZ.toFixed(1)+'σ — все в коллах','bear');
+    tgSend('⚠️ <b>PCR EUPHORIA</b>\nPCR: '+S.pcr.toFixed(2)+' (z='+pcrZ.toFixed(1)+'σ)\nВсе ставят на рост — contrarian BEARISH.\nBTC: '+btcStr+'\n<i>Осторожно с лонгами.</i>');
+  });
+
+  // 10. 25d RR Spike 1d
+  if(zRR1!==null&&zRR1>2&&(zRR7===null||zRR7<1)) alertOnce('rr1spike',120,()=>{
+    addAlert('25d RR 1d Spike z=+'+zRR1.toFixed(1)+'σ — event panic','bull');
+    tgSend('⭐ <b>25d RR SPIKE (1D)</b>\nz=+'+zRR1.toFixed(1)+'σ | 7d нейтральный\nEvent-driven паника. Contrarian BULLISH.\nBTC: '+btcStr+'\n<i>Покупай страх.</i>');
+  });
+
+  // 11. Term Structure Inversion
+  if(S.vol25&&S.vol25.t1d&&S.vol25.t30d&&S.vol25.t1d.atmIV>S.vol25.t30d.atmIV+2) alertOnce('terminv',120,()=>{
+    addAlert('Term Structure инвертирована — острый страх','bear');
+    tgSend('⚠️ <b>TERM STRUCTURE ИНВЕРТИРОВАНА</b>\n1d ATM IV: '+S.vol25.t1d.atmIV.toFixed(1)+'% > 30d: '+S.vol25.t30d.atmIV.toFixed(1)+'%\nBTC: '+btcStr+'\n<i>Уменьши позиции.</i>');
+  });
+
+  // 12. High funding
+  if(S.fundingRate>0.12) alertOnce('fundhi',120,()=>{
+    addAlert('Funding агрег. +'+(S.fundingRate).toFixed(4)+'% — лонги перегреты','bear');
+    tgSend('⚠️ <b>FUNDING ЭКСТРЕМУМ</b>\nАгрег: +'+(S.fundingRate).toFixed(4)+'%\nBTC: '+btcStr+'\n<i>Contrarian bearish.</i>');
+  });
+
+  // 13. Negative funding
+  if(S.fundingRate<-0.06) alertOnce('fundlo',120,()=>{
+    addAlert('Funding агрег. '+(S.fundingRate).toFixed(4)+'% — шорты перегреты','bull');
+    tgSend('⭐ <b>NEGATIVE FUNDING</b>\nАгрег: '+(S.fundingRate).toFixed(4)+'%\nContrarian BULLISH.\nBTC: '+btcStr);
+  });
+
+  // 14. Funding divergence
+  if(S.fundingSpread>0.15) alertOnce('fundspread',180,()=>{
+    addAlert('Funding расхождение бирж +'+(S.fundingSpread).toFixed(4)+'%','neut');
+    const fr=S.fundingRates||{};
+    tgSend('⚡ <b>FUNDING РАСХОЖДЕНИЕ БИРЖ</b>\n'+
+      (fr.binance!=null?'Binance: '+(fr.binance>=0?'+':'')+fr.binance.toFixed(4)+'%\n':'')+
+      (fr.bybit!=null?'Bybit: '+(fr.bybit>=0?'+':'')+fr.bybit.toFixed(4)+'%\n':'')+
+      (fr.okx!=null?'OKX: '+(fr.okx>=0?'+':'')+fr.okx.toFixed(4)+'%\n':'')+
+      (fr.hyperliquid!=null?'Hyperliquid: '+(fr.hyperliquid>=0?'+':'')+fr.hyperliquid.toFixed(4)+'%\n':'')+
+      '\n<i>Retail overheat на отдельной бирже.</i>');
+  });
+
+  // 15. Max Pain Confluence Weekly+Monthly
+  if(S.maxPain>0&&S.maxPainMonthly>0&&Math.abs(S.maxPain-S.maxPainMonthly)<1000) alertOnce('mpconf',240,()=>{
+    addAlert('Max Pain Confluence W+M $'+S.maxPain.toLocaleString('en-US'),'bull');
+    tgSend('⭐ <b>MAX PAIN CONFLUENCE</b>\nWeekly: $'+S.maxPain.toLocaleString('en-US')+' = Monthly: $'+S.maxPainMonthly.toLocaleString('en-US')+'\nДвойной магнит!\nBTC: '+btcStr+'\n<i>Входи агрессивно.</i>');
+  });
+
+  // 16. Expiry countdown
+  if(S.maxPainExp){
+    const hl=Math.max(0,(S.maxPainExp.getTime()-Date.now())/3600000);
+    const mpDelta=((S.maxPain-p)/p*100);
+    if(hl<48&&hl>47) alertOnce('exp48',1440,()=>{addAlert('48ч до экспирации — Max Pain $'+S.maxPain.toLocaleString('en-US'),'neut');tgSend('⏰ <b>48Ч ДО ЭКСПИРАЦИИ</b>\nMax Pain: $'+S.maxPain.toLocaleString('en-US')+' ('+(mpDelta>=0?'+':'')+mpDelta.toFixed(1)+'%)\nBTC: '+btcStr);});
+    if(hl<24&&hl>23) alertOnce('exp24',1440,()=>{addAlert('24ч до экспирации — Max Pain эффект усилен!','neut');tgSend('⏰ <b>24Ч ДО ЭКСПИРАЦИИ</b>\nMax Pain: $'+S.maxPain.toLocaleString('en-US')+'\nBTC: '+btcStr+'\n<i>Движение к Max Pain наиболее вероятно.</i>');});
+    if(hl<2&&hl>1.8) alertOnce('exp2',60,()=>{addAlert('2ч до экспирации пятница!','neut');tgSend('🔔 <b>2Ч ДО ЭКСПИРАЦИИ!</b>\nMax Pain: $'+S.maxPain.toLocaleString('en-US')+' | BTC: '+btcStr+'\n<i>Последний шанс позиционироваться.</i>');});
+  }
+
+  // 17. Z-score ±2σ any component
+  const zMap={pcr:{key:'_pcr',inv:true,nm:'PCR'},ivSkew:{key:'_ivs',inv:true,nm:'IV Skew'},termStr:{key:'_term',inv:true,nm:'Term Str.'},funding:{key:'_fund',inv:true,nm:'Funding'}};
+  for(const[k,cfg] of Object.entries(zMap)){
+    const dz=S.scores[cfg.key]; if(!dz||dz.z7===null)continue;
+    const z=cfg.inv?-dz.z7:dz.z7;
+    if(Math.abs(z)>2) alertOnce('z2_'+k,120,()=>{
+      addAlert(cfg.nm+' z='+(z>=0?'+':'')+z.toFixed(1)+'σ экстремум!',z>0?'bull':'bear');
+      tgSend('📊 <b>Z-SCORE ЭКСТРЕМУМ: '+cfg.nm+'</b>\nz='+(z>=0?'+':'')+z.toFixed(1)+'σ\nBTC: '+btcStr+' | Composite: '+compStr);
+    });
+  }
 }
 async function morning(){
   const now=new Date();
