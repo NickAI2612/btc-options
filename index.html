@@ -598,7 +598,7 @@ async function sbFetch() {
   if (!SB.url || !SB.key) return;
   try {
     const r = await fetch(
-      SB.url+'/rest/v1/options_history?order=ts.asc&limit=28800',
+      SB.url+'/rest/v1/options_history?order=ts.asc&limit=28800&select=ts,price,pcr,iv_skew,dvol,term_str,mp_delta,gex,funding,rr1d,rr7d,rr30d,bf7d,atm7d,atm30d',
       { headers: { 'apikey': SB.key, 'Authorization': 'Bearer '+SB.key } }
     );
     if (!r.ok) return;
@@ -609,7 +609,9 @@ async function sbFetch() {
       ts:r.ts, price:r.price||0, pcr:r.pcr||0,
       ivSkew:r.iv_skew||0, dvol:r.dvol||0,
       termStr:r.term_str||0, mpDelta:r.mp_delta||0,
-      gex:r.gex||0, funding:r.funding||0
+      gex:r.gex||0, funding:r.funding||0,
+      rr1d:r.rr1d||0, rr7d:r.rr7d||0, rr30d:r.rr30d||0,
+      bf7d:r.bf7d||0, atm7d:r.atm7d||0, atm30d:r.atm30d||0
     }));
     histSave(); // sync to localStorage cache
     console.log('Loaded '+S.hist.length+' points from Supabase');
